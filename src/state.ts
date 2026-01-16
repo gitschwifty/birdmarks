@@ -1,0 +1,97 @@
+import { join } from "path";
+import type { ExporterState, ExportError } from "./types";
+
+const STATE_FILE = "exporter-state.json";
+const ERRORS_FILE = "errors.json";
+
+export async function loadState(outputDir: string): Promise<ExporterState> {
+  const statePath = join(outputDir, STATE_FILE);
+  const file = Bun.file(statePath);
+
+  if (await file.exists()) {
+    try {
+      return await file.json();
+    } catch {
+      console.warn(`Warning: Could not parse ${STATE_FILE}, starting fresh`);
+    }
+  }
+  return {};
+}
+
+export async function saveState(
+  outputDir: string,
+  state: ExporterState
+): Promise<void> {
+  const statePath = join(outputDir, STATE_FILE);
+  await Bun.write(statePath, JSON.stringify(state, null, 2));
+}
+
+export async function clearPaginationState(outputDir: string): Promise<void> {
+  const state = await loadState(outputDir);
+  delete state.nextCursor;
+  delete state.currentPageBookmarks;
+  await saveState(outputDir, state);
+}
+
+export async function finishRun(outputDir: string): Promise<void> {
+  const state = await loadState(outputDir);
+
+  // Current run's first becomes previous for next run
+  if (state.currentRunFirstExported) {
+    state.previousFirstExported = state.currentRunFirstExported;
+    delete state.currentRunFirstExported;
+  }
+
+  // Clear pagination state
+  delete state.nextCursor;
+  delete state.currentPageBookmarks;
+
+  await saveState(outputDir, state);
+}
+
+export async function loadErrors(outputDir: string): Promise<ExportError[]> {
+  const errorsPath = join(outputDir, ERRORS_FILE);
+  const file = Bun.file(errorsPath);
+
+  if (await file.exists()) {
+    try {
+      return await file.json();
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+export async function appendError(
+  outputDir: string,
+  error: ExportError
+): Promise<void> {
+  const errors = await loadErrors(outputDir);
+  errors.push(error);
+  const errorsPath = join(outputDir, ERRORS_FILE);
+  await Bun.write(errorsPath, JSON.stringify(errors, null, 2));
+}
+
+export function bookmarkFilename(tweet: {
+  id: string;
+  createdAt?: string;
+  author: { username: string };
+}): string {
+  // Format: yyyy-mm-dd-handle-id.md
+  let datePart = "unknown-date";
+  if (tweet.createdAt) {
+    const date = new Date(tweet.createdAt);
+    datePart = date.toISOString().split("T")[0] ?? "unknown-date"; // yyyy-mm-dd
+  }
+  return `${datePart}-${tweet.author.username}-${tweet.id}.md`;
+}
+
+export async function bookmarkExists(
+  outputDir: string,
+  tweet: { id: string; createdAt?: string; author: { username: string } }
+): Promise<boolean> {
+  const filename = bookmarkFilename(tweet);
+  const filepath = join(outputDir, filename);
+  return await Bun.file(filepath).exists();
+}

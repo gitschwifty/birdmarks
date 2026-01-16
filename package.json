@@ -1,0 +1,21 @@
+{
+  "name": "bird-bookmarks",
+  "version": "1.0.0",
+  "description": "Export Twitter bookmarks to markdown with thread expansion",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "export": "bun run src/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@steipete/bird": "^0.7.0"
+  }
+}
