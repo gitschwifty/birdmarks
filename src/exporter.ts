@@ -354,6 +354,7 @@ export async function exportBookmarks(
     console.log("\n=== Fetching new bookmarks first ===\n");
     let newPageNum = 0;
     let newCursor: string | undefined = undefined;
+    let newPhaseFirstExported: string | undefined;
 
     newBookmarksLoop: while (true) {
       newPageNum++;
@@ -447,6 +448,11 @@ export async function exportBookmarks(
             await writeBookmarkMarkdown(bookmark, config.outputDir);
             console.log(`  Exported (new): ${bookmark.originalTweet.id}`);
             result.exported++;
+
+            // Track first exported in new phase
+            if (!newPhaseFirstExported) {
+              newPhaseFirstExported = tweet.id;
+            }
           } catch (error: unknown) {
             if (error instanceof RateLimitError) {
               console.error(`\n${error.message}. State preserved. Resume later to continue.`);
@@ -479,6 +485,13 @@ export async function exportBookmarks(
         }
         throw error;
       }
+    }
+
+    // Update firstExported if we exported anything in new phase
+    if (newPhaseFirstExported) {
+      state.currentRunFirstExported = newPhaseFirstExported;
+      await saveState(config.outputDir, state);
+      console.log(`Updated first exported to: ${newPhaseFirstExported}`);
     }
 
     console.log(`\n=== New bookmarks phase complete (${result.exported} exported) ===`);
