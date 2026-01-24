@@ -1,11 +1,11 @@
 # birdmarks
 
-Export your Twitter/X bookmarks to markdown files with full thread expansion, media downloads, and article extraction.
+Export your Twitter/X bookmarks to markdown files with full thread expansion, media downloads, and article extraction. Note that rate limiting happens pretty quickly with replies, media, and quote tweet nesting, i.e. sometimes I get through around 100 before hitting the rate limit.
 
 ## Requirements
 
 - [Bun](https://bun.sh) runtime (v1.0+)
-- [bird](https://github.com/steipete/bird) CLI installed (`bun add -g @steipete/bird`)
+- [bird](https://github.com/steipete/bird) CLI installed (`bun add -g @steipete/bird`) (technically not required but easier to test auth with this)
 - Logged into Twitter/X in Chrome, Safari, or Firefox (for cookie authentication)
 
 ## Installation
