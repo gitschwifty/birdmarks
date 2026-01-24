@@ -18,7 +18,7 @@ function isRateLimitError(error: unknown): boolean {
 export async function expandThread(
   client: TwitterClient,
   originalTweet: TweetData,
-  quoteDepth: number
+  includeReplies: boolean
 ): Promise<ThreadResult> {
   const threadTweets: TweetData[] = [];
   const potentialReplies: TweetData[] = [];
@@ -32,7 +32,18 @@ export async function expandThread(
     try {
       const result = await client.getThread(currentTweetId);
 
-      if (!result.success || !result.tweets || result.tweets.length === 0) {
+      if (!result.success) {
+        const errorMsg = result.error || "unknown error";
+        // Check if this is a rate limit error - if so, throw to trigger save & exit
+        if (errorMsg.includes("429") || errorMsg.includes("rate") || errorMsg.includes("Too Many")) {
+          throw new Error(`Rate limit: ${errorMsg}`);
+        }
+        console.warn(`  getThread failed for ${currentTweetId}: ${errorMsg}`);
+        break;
+      }
+
+      if (!result.tweets || result.tweets.length === 0) {
+        // Normal - no replies or thread continuation found
         break;
       }
 
@@ -74,6 +85,11 @@ export async function expandThread(
       console.warn(`Error expanding thread from ${currentTweetId}: ${error}`);
       break;
     }
+  }
+
+  // If not including replies, return just the thread
+  if (!includeReplies) {
+    return { threadTweets, replies: [] };
   }
 
   // Filter replies: exclude any that are actually part of the thread

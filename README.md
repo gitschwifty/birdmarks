@@ -25,6 +25,13 @@ bun run src/index.ts
 # Export to custom directory
 bun run src/index.ts ./my-bookmarks
 
+# Export a single tweet by ID (useful for testing or re-running errors)
+bun run src/index.ts --tweet <tweetID>
+bun run src/index.ts <tweetID> # auto-detected if all digits
+
+# Include replies from other users (not just the author's thread)
+bun run src/index.ts --replies
+
 # Specify browser for cookie source
 bun run src/index.ts --cookie-source firefox
 
@@ -38,15 +45,21 @@ bun run src/index.ts --quote-depth 5
 |--------|-------------|
 | `[output-dir]` | Output directory for markdown files (default: `./bookmarks`) |
 | `-o, --output <dir>` | Alternative way to specify output directory |
-| `--quote-depth <n>` | Maximum depth for expanding quoted tweets (default: 3) |
+| `-t, --tweet <id>` | Process a single tweet instead of all bookmarks |
+| `-n, --max-pages <n>` | Limit pages fetched this run (to avoid rate limits) |
+| `-N, --new-first` | Fetch new bookmarks first before resuming from cursor |
+| `-r, --replies` | Include replies from other users (default: off) |
+| `--quote-depth <n>` | Maximum depth for expanding quoted tweets (default: 3, -1 for unlimited) |
 | `--cookie-source <browser>` | Browser to get cookies from: `safari`, `chrome`, `firefox` |
 | `-h, --help` | Show help message |
+
+**Note on quote depth:** Using `-1` for unlimited caps at 20 levels deep. If you somehow need more, open an issue or change the cap in `src/index.ts`.
 
 ## Output Structure
 
 ```
 bookmarks/
-├── 2024-01-15-username-first-words-of-tweet.md   # Bookmark markdown files
+├── 2024-01-15-username-tweetId.md   # Bookmark markdown files
 ├── assets/                                        # Downloaded images
 │   └── abc123.jpg
 ├── articles/                                      # Extracted Twitter articles
@@ -57,14 +70,15 @@ bookmarks/
 
 ## Features
 
-- **Thread expansion** - Follows author's reply chain to capture full threads
+- **Thread expansion** - Always follows the author's reply chain to capture full threads
 - **Quote tweets** - Recursively fetches nested quoted tweets
-- **Replies** - Captures top-level replies to bookmarked tweets
+- **Replies** - Optionally captures top-level replies from other users (use `--replies` flag)
 - **Media** - Downloads images to local `assets/` folder
 - **Articles** - Extracts Twitter articles to `articles/` subfolder
 - **Link resolution** - Expands t.co URLs and fetches page titles
 - **Resume support** - Saves state on rate limit, resume by running again
 - **Incremental export** - Skips already-exported bookmarks
+- **Single tweet mode** - Process a single tweet by ID for testing or re-running errors
 
 ## Rate Limiting
 

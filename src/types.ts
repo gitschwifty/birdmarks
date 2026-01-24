@@ -27,6 +27,7 @@ export interface ExporterState {
   // Pagination state
   nextCursor?: string;
   currentPageBookmarks?: TweetData[];
+  currentPage?: number;
 
   // First-exported tracking
   previousFirstExported?: string; // From last completed run
@@ -45,4 +46,7 @@ export interface ExportError {
 export interface ExporterConfig {
   outputDir: string;
   quoteDepth: number;
+  includeReplies: boolean;
+  maxPages?: number; // Limit pages per run (undefined = unlimited)
+  fetchNewFirst?: boolean; // Fetch new bookmarks before resuming from cursor
 }

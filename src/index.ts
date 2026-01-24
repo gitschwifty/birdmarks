@@ -1,7 +1,7 @@
 import { resolve } from "path";
 import { mkdir } from "fs/promises";
 import { TwitterClient, resolveCredentials } from "@steipete/bird";
-import { exportBookmarks } from "./exporter";
+import { exportBookmarks, exportSingleTweet } from "./exporter";
 import type { ExporterConfig } from "./types";
 
 async function main() {
@@ -11,6 +11,10 @@ async function main() {
   let outputDir = "./bookmarks";
   let quoteDepth = 3;
   let cookieSource: "safari" | "chrome" | "firefox" | undefined;
+  let singleTweetId: string | undefined;
+  let includeReplies = false;
+  let maxPages: number | undefined;
+  let fetchNewFirst = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -21,16 +25,34 @@ async function main() {
       if (val) outputDir = val;
     } else if (arg === "--quote-depth") {
       const val = args[++i];
-      if (val) quoteDepth = parseInt(val, 10);
+      if (val) {
+        const parsed = parseInt(val, 10);
+        quoteDepth = parsed === -1 ? 20 : parsed; // -1 means "unlimited" (capped at 20)
+      }
     } else if (arg === "--cookie-source") {
       const val = args[++i];
       if (val) cookieSource = val as "safari" | "chrome" | "firefox";
+    } else if (arg === "-t" || arg === "--tweet") {
+      const val = args[++i];
+      if (val) singleTweetId = val;
+    } else if (arg === "-r" || arg === "--replies") {
+      includeReplies = true;
+    } else if (arg === "-n" || arg === "--max-pages") {
+      const val = args[++i];
+      if (val) maxPages = parseInt(val, 10);
+    } else if (arg === "-N" || arg === "--new-first") {
+      fetchNewFirst = true;
     } else if (arg === "-h" || arg === "--help") {
       printHelp();
       process.exit(0);
     } else if (!arg.startsWith("-")) {
-      // Positional argument = output dir
-      outputDir = arg;
+      // Positional argument - could be output dir or tweet ID
+      // Tweet IDs are all digits and typically 19+ chars
+      if (/^\d{15,}$/.test(arg)) {
+        singleTweetId = arg;
+      } else {
+        outputDir = arg;
+      }
     }
   }
 
@@ -39,6 +61,9 @@ async function main() {
 
   console.log(`Output directory: ${outputDir}`);
   console.log(`Quote depth: ${quoteDepth}`);
+  console.log(`Include replies: ${includeReplies}`);
+  if (maxPages) console.log(`Max pages this run: ${maxPages}`);
+  if (fetchNewFirst) console.log(`Fetch new first: enabled`);
   console.log("");
 
   // Ensure output directory exists
@@ -85,9 +110,32 @@ async function main() {
   const config: ExporterConfig = {
     outputDir,
     quoteDepth,
+    includeReplies,
+    maxPages,
+    fetchNewFirst,
   };
 
   try {
+    // Single tweet mode
+    if (singleTweetId) {
+      console.log(`Processing single tweet: ${singleTweetId}`);
+      console.log("");
+
+      const result = await exportSingleTweet(client, singleTweetId, config);
+
+      console.log("");
+      if (result.success) {
+        console.log("=== Export Complete ===");
+        console.log(`File: ${result.filename}`);
+      } else {
+        console.error("=== Export Failed ===");
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+      return;
+    }
+
+    // Full bookmarks export
     const result = await exportBookmarks(client, config);
 
     console.log("");
@@ -117,28 +165,38 @@ async function main() {
 
 function printHelp() {
   console.log(`
-bird-bookmarks - Export Twitter bookmarks to markdown
+birdmarks - Export Twitter bookmarks to markdown
 
 Usage:
-  bird-bookmarks [output-dir] [options]
+  birdmarks [output-dir] [options]
+  birdmarks --tweet <id> [options]
+  birdmarks <tweet-id> [options]
 
 Arguments:
   output-dir           Output directory for markdown files (default: ./bookmarks)
+  tweet-id             Process a single tweet by ID (auto-detected if all digits)
 
 Options:
+  -t, --tweet <id>     Process a single tweet instead of all bookmarks
   -o, --output <dir>   Output directory (alternative to positional arg)
-  --quote-depth <n>    Maximum depth for quoted tweets (default: 3)
+  -n, --max-pages <n>  Limit pages fetched this run (to avoid rate limits)
+  -N, --new-first      Fetch new bookmarks first before resuming from cursor
+  -r, --replies        Include replies from other users (default: off)
+  --quote-depth <n>    Maximum depth for quoted tweets (default: 3, -1 for unlimited)
   --cookie-source <s>  Browser to get cookies from: safari, chrome, firefox
   -h, --help           Show this help message
 
 Examples:
-  bird-bookmarks ./my-bookmarks
-  bird-bookmarks -o ~/Documents/twitter-bookmarks --cookie-source safari
+  birdmarks ./my-bookmarks                    # Export all bookmarks
+  birdmarks --tweet 2011168940404457736       # Export single tweet
+  birdmarks 2011168940404457736               # Same as above (auto-detected)
+  birdmarks -o ~/bookmarks --cookie-source firefox
 
 Notes:
   - Requires being logged into Twitter in your browser
   - State is saved automatically for resume on rate limits
   - Run again to fetch new bookmarks (skips already exported)
+  - Single tweet mode is useful for testing or re-running errors
 `);
 }
 

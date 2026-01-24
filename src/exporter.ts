@@ -6,6 +6,7 @@ import {
   finishRun,
   appendError,
   bookmarkExists,
+  bookmarkExistsById,
 } from "./state";
 import { expandThread } from "./thread";
 import { processTweet, writeBookmarkMarkdown, writeArticleFromTweet } from "./markdown";
@@ -245,7 +246,7 @@ async function processBookmark(
 ): Promise<ProcessedBookmark> {
   // Expand thread
   const { threadTweets, replies } = await withRateLimitCheck(
-    () => expandThread(client, tweet, config.quoteDepth),
+    () => expandThread(client, tweet, config.includeReplies),
     `expanding thread ${tweet.id}`
   );
 
@@ -274,6 +275,53 @@ async function processBookmark(
   };
 }
 
+// Export a single tweet by ID (for testing or re-running errors)
+export async function exportSingleTweet(
+  client: TwitterClient,
+  tweetId: string,
+  config: ExporterConfig
+): Promise<{ success: boolean; error?: string; filename?: string }> {
+  // Ensure output directory exists
+  await Bun.write(config.outputDir + "/.keep", "");
+  await ensureAssetsDir(config.outputDir);
+
+  console.log(`Fetching tweet ${tweetId}...`);
+
+  // Fetch the tweet
+  const tweetResult = await withRateLimitCheck(
+    () => client.getTweet(tweetId),
+    `fetching tweet ${tweetId}`
+  );
+
+  if (!tweetResult.success || !tweetResult.tweet) {
+    return { success: false, error: tweetResult.error || "Tweet not found" };
+  }
+
+  const tweet = tweetResult.tweet;
+  console.log(`Got tweet by @${tweet.author.username}: ${tweet.text.slice(0, 50)}...`);
+
+  // Process like a bookmark
+  console.log("Processing tweet (expanding thread, fetching media, etc.)...");
+  const processed = await processBookmark(client, tweet, config);
+
+  // Write markdown
+  const filename = await writeBookmarkMarkdown(processed, config.outputDir);
+  console.log(`Exported: ${filename}`);
+
+  // Fetch any linked articles
+  const { statusIds, tweetsWithArticleLinks } = collectLinkedIds(processed);
+  if (statusIds.length > 0) {
+    console.log(`Fetching ${statusIds.length} linked tweets for potential articles...`);
+    await fetchLinkedArticles(client, statusIds, config);
+  }
+  if (tweetsWithArticleLinks.length > 0) {
+    console.log(`Fetching ${tweetsWithArticleLinks.length} tweets with article links...`);
+    await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config);
+  }
+
+  return { success: true, filename };
+}
+
 export async function exportBookmarks(
   client: TwitterClient,
   config: ExporterConfig
@@ -297,11 +345,159 @@ export async function exportBookmarks(
 
   // Track if this is a fresh run (no pagination state)
   const isFreshRun = !state.nextCursor && !state.currentPageBookmarks;
+  const hasResumeState = !!state.nextCursor || !!state.currentPageBookmarks;
+  let pagesFetchedThisRun = 0;
 
-  let pageNum = 0;
+  // === NEW BOOKMARKS PHASE ===
+  // If fetchNewFirst is enabled and we have resume state, fetch new bookmarks from the top first
+  if (config.fetchNewFirst && hasResumeState) {
+    console.log("\n=== Fetching new bookmarks first ===\n");
+    let newPageNum = 0;
+    let newCursor: string | undefined = undefined;
+
+    newBookmarksLoop: while (true) {
+      newPageNum++;
+      pagesFetchedThisRun++;
+
+      // Check max pages limit
+      if (config.maxPages && pagesFetchedThisRun >= config.maxPages) {
+        console.log(`Reached max pages limit (${config.maxPages}) during new bookmarks phase.`);
+        console.log("State preserved. Run again to continue.");
+        return result;
+      }
+
+      console.log(`Fetching new bookmarks page ${newPageNum}...`);
+
+      try {
+        const bookmarksResult = await withRateLimitCheck(
+          () => client.getAllBookmarks({ maxPages: 1, cursor: newCursor }),
+          "fetching new bookmarks"
+        );
+
+        if (!bookmarksResult.success) {
+          throw new Error(bookmarksResult.error || "Failed to fetch bookmarks");
+        }
+
+        const bookmarksPage = bookmarksResult.tweets;
+        newCursor = bookmarksResult.nextCursor;
+
+        if (bookmarksPage.length === 0) {
+          console.log("No new bookmarks found.");
+          break;
+        }
+
+        console.log(`Got ${bookmarksPage.length} bookmarks${newCursor ? ", more available" : ""}`);
+
+        // Check if first 3 already exist - if so, we've caught up
+        const checkCount = Math.min(3, bookmarksPage.length);
+        let alreadyExistCount = 0;
+        for (let i = 0; i < checkCount; i++) {
+          const tweet = bookmarksPage[i];
+          if (tweet && (await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt))) {
+            alreadyExistCount++;
+          }
+        }
+        if (checkCount > 0 && alreadyExistCount === checkCount) {
+          console.log(`First ${checkCount} bookmarks already exported, new bookmarks phase complete.`);
+          break;
+        }
+
+        // Process bookmarks until we hit an already-exported one
+        for (let i = 0; i < bookmarksPage.length; i++) {
+          const tweet = bookmarksPage[i];
+          if (!tweet) continue;
+
+          // Check if already exported
+          if (await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt)) {
+            console.log(`Hit already-exported bookmark ${tweet.id}, new bookmarks phase complete.`);
+            break newBookmarksLoop;
+          }
+
+          console.log(
+            `Processing new bookmark ${i + 1}/${bookmarksPage.length}: @${tweet.author.username} - ${tweet.text.slice(0, 50)}...`
+          );
+
+          try {
+            const { threadTweets, replies } = await withRateLimitCheck(
+              () => expandThread(client, tweet, config.includeReplies),
+              `expanding thread ${tweet.id}`
+            );
+
+            // Expand quoted tweets
+            const expandedOriginal = await expandQuotedTweets(client, tweet, config.quoteDepth);
+            const expandedThreadTweets = await Promise.all(
+              threadTweets.map((t) => expandQuotedTweets(client, t, config.quoteDepth))
+            );
+
+            // Process all tweets
+            const processedTweet = await processTweet(expandedOriginal, config.outputDir);
+            const processedThread = await Promise.all(
+              expandedThreadTweets.map((t) => processTweet(t, config.outputDir))
+            );
+            const processedReplies = await Promise.all(
+              replies.map((t) => processTweet(t, config.outputDir))
+            );
+
+            const bookmark: ProcessedBookmark = {
+              originalTweet: processedTweet,
+              threadTweets: processedThread,
+              replies: processedReplies,
+            };
+
+            await writeBookmarkMarkdown(bookmark, config.outputDir);
+            console.log(`  Exported (new): ${bookmark.originalTweet.id}`);
+            result.exported++;
+          } catch (error: unknown) {
+            if (error instanceof RateLimitError) {
+              console.error(`\n${error.message}. State preserved. Resume later to continue.`);
+              result.rateLimited = true;
+              return result;
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`  Error processing ${tweet.id}: ${errorMessage}`);
+            await appendError(config.outputDir, {
+              tweetId: tweet.id,
+              error: errorMessage,
+              timestamp: new Date().toISOString(),
+              context: `Processing new bookmark from @${tweet.author.username}`,
+            });
+            result.errors++;
+          }
+        }
+
+        if (!newCursor) {
+          console.log("No more new bookmarks pages.");
+          break;
+        }
+
+        await sleep(PAGE_DELAY_MS);
+      } catch (error) {
+        if (error instanceof RateLimitError) {
+          console.error(`\n${error.message}. State preserved. Resume later to continue.`);
+          result.rateLimited = true;
+          return result;
+        }
+        throw error;
+      }
+    }
+
+    console.log(`\n=== New bookmarks phase complete (${result.exported} exported) ===`);
+    console.log("=== Continuing from saved cursor ===\n");
+  }
+
+  // === MAIN EXPORT LOOP ===
+  let pageNum = state.currentPage ?? 0;
+  if (!config.fetchNewFirst || !hasResumeState) {
+    pagesFetchedThisRun = 0; // Reset if we didn't do new phase
+  }
+  if (state.currentPage) {
+    console.log(`Resuming from page ${state.currentPage}...`);
+  }
 
   while (true) {
     pageNum++;
+    pagesFetchedThisRun++;
+    state.currentPage = pageNum;
 
     // Fetch bookmarks page
     let bookmarksPage: TweetData[];
@@ -368,6 +564,23 @@ export async function exportBookmarks(
         console.error(`Failed to fetch bookmarks: ${error}`);
         throw error;
       }
+    }
+
+    // Check if first 3 tweets already exist (more robust than single previousFirstExported)
+    const checkCount = Math.min(3, bookmarksPage.length);
+    let alreadyExistCount = 0;
+    for (let i = 0; i < checkCount; i++) {
+      const tweet = bookmarksPage[i];
+      if (tweet && (await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt))) {
+        alreadyExistCount++;
+      }
+    }
+    if (checkCount > 0 && alreadyExistCount === checkCount) {
+      console.log(
+        `First ${checkCount} bookmarks already exported, stopping. (Run with fresh state to re-export.)`
+      );
+      result.hitPreviousExport = true;
+      break;
     }
 
     // Process each bookmark
@@ -461,6 +674,22 @@ export async function exportBookmarks(
     );
 
     if (result.hitPreviousExport) {
+      break;
+    }
+
+    // Check if we've hit the max pages limit for this run
+    if (config.maxPages && pagesFetchedThisRun >= config.maxPages) {
+      if (nextCursor) {
+        // More pages available - save state for resume
+        state.nextCursor = nextCursor;
+        state.currentPageBookmarks = undefined;
+        await saveState(config.outputDir, state);
+        console.log(`Reached max pages limit (${config.maxPages}). State saved. Run again to continue.`);
+        // Return early - don't call finishRun which would clear the cursor
+        return result;
+      } else {
+        console.log(`Reached max pages limit (${config.maxPages}), but no more pages available anyway.`);
+      }
       break;
     }
 

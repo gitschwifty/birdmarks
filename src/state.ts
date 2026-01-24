@@ -30,6 +30,7 @@ export async function clearPaginationState(outputDir: string): Promise<void> {
   const state = await loadState(outputDir);
   delete state.nextCursor;
   delete state.currentPageBookmarks;
+  delete state.currentPage;
   await saveState(outputDir, state);
 }
 
@@ -45,6 +46,7 @@ export async function finishRun(outputDir: string): Promise<void> {
   // Clear pagination state
   delete state.nextCursor;
   delete state.currentPageBookmarks;
+  delete state.currentPage;
 
   await saveState(outputDir, state);
 }
@@ -94,4 +96,27 @@ export async function bookmarkExists(
   const filename = bookmarkFilename(tweet);
   const filepath = join(outputDir, filename);
   return await Bun.file(filepath).exists();
+}
+
+// Check if bookmark exists by date + tweet ID (handles username changes, fast lookup)
+export async function bookmarkExistsById(
+  outputDir: string,
+  tweetId: string,
+  createdAt?: string
+): Promise<boolean> {
+  // Use date prefix to narrow search if available
+  let pattern: string;
+  if (createdAt) {
+    const date = new Date(createdAt);
+    const datePart = date.toISOString().split("T")[0] ?? "unknown-date";
+    pattern = `${datePart}-*-${tweetId}.md`;
+  } else {
+    pattern = `*-${tweetId}.md`;
+  }
+
+  const glob = new Bun.Glob(pattern);
+  for await (const _ of glob.scan(outputDir)) {
+    return true; // Found at least one match
+  }
+  return false;
 }
