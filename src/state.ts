@@ -108,16 +108,24 @@ export function getDateFolder(createdAt?: string): string {
   return `${year}-${month}`;
 }
 
-export function bookmarkFilename(tweet: {
-  id: string;
-  createdAt?: string;
-  author: { username: string };
-}): string {
-  // Format: yyyy-mm-dd-handle-id.md
+export function bookmarkFilename(
+  tweet: {
+    id: string;
+    createdAt?: string;
+    author: { username: string };
+  },
+  useDateFolders?: boolean
+): string {
+  // Format: yyyy-mm-dd-handle-id.md (or dd-handle-id.md when in date folders)
   let datePart = "unknown-date";
   if (tweet.createdAt) {
     const date = new Date(tweet.createdAt);
-    datePart = date.toISOString().split("T")[0] ?? "unknown-date"; // yyyy-mm-dd
+    if (useDateFolders) {
+      // Just the day when folder already has yyyy-mm
+      datePart = String(date.getUTCDate()).padStart(2, "0");
+    } else {
+      datePart = date.toISOString().split("T")[0] ?? "unknown-date"; // yyyy-mm-dd
+    }
   }
   const safeUsername = sanitizeFilename(tweet.author.username);
   return `${datePart}-${safeUsername}-${tweet.id}.md`;
@@ -128,7 +136,7 @@ export async function bookmarkExists(
   tweet: { id: string; createdAt?: string; author: { username: string } },
   useDateFolders?: boolean
 ): Promise<boolean> {
-  const filename = bookmarkFilename(tweet);
+  const filename = bookmarkFilename(tweet, useDateFolders);
   if (useDateFolders) {
     const folder = getDateFolder(tweet.createdAt);
     const filepath = join(outputDir, folder, filename);
@@ -149,11 +157,12 @@ export async function bookmarkExistsById(
   let pattern: string;
   if (createdAt) {
     const date = new Date(createdAt);
-    const datePart = date.toISOString().split("T")[0] ?? "unknown-date";
     if (useDateFolders) {
       const folder = getDateFolder(createdAt);
-      pattern = `${folder}/${datePart}-*-${tweetId}.md`;
+      const day = String(date.getUTCDate()).padStart(2, "0");
+      pattern = `${folder}/${day}-*-${tweetId}.md`;
     } else {
+      const datePart = date.toISOString().split("T")[0] ?? "unknown-date";
       pattern = `${datePart}-*-${tweetId}.md`;
     }
   } else {

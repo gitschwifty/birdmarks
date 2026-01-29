@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { sanitizeFilename, getDateFolder } from "./state";
+import { sanitizeFilename, getDateFolder, bookmarkFilename } from "./state";
 
 describe("sanitizeFilename", () => {
   // Examples from the problem description
@@ -208,5 +208,49 @@ describe("getDateFolder", () => {
   test("pads single-digit months with leading zero", () => {
     expect(getDateFolder("2025-05-01T00:00:00.000Z")).toBe("2025-05");
     expect(getDateFolder("2025-09-15T12:00:00.000Z")).toBe("2025-09");
+  });
+});
+
+describe("bookmarkFilename", () => {
+  const tweet = {
+    id: "123456789",
+    createdAt: "2025-01-15T12:30:00.000Z",
+    author: { username: "testuser" },
+  };
+
+  test("returns yyyy-mm-dd-username-id.md format by default", () => {
+    expect(bookmarkFilename(tweet)).toBe("2025-01-15-testuser-123456789.md");
+  });
+
+  test("returns dd-username-id.md format when useDateFolders is true", () => {
+    expect(bookmarkFilename(tweet, true)).toBe("15-testuser-123456789.md");
+  });
+
+  test("pads single-digit day with leading zero", () => {
+    const earlyMonthTweet = {
+      id: "987654321",
+      createdAt: "2025-02-03T08:00:00.000Z",
+      author: { username: "someone" },
+    };
+    expect(bookmarkFilename(earlyMonthTweet, true)).toBe("03-someone-987654321.md");
+    expect(bookmarkFilename(earlyMonthTweet, false)).toBe("2025-02-03-someone-987654321.md");
+  });
+
+  test("handles missing createdAt", () => {
+    const noDateTweet = {
+      id: "111",
+      author: { username: "user" },
+    };
+    expect(bookmarkFilename(noDateTweet)).toBe("unknown-date-user-111.md");
+    expect(bookmarkFilename(noDateTweet, true)).toBe("unknown-date-user-111.md");
+  });
+
+  test("sanitizes username", () => {
+    const specialTweet = {
+      id: "222",
+      createdAt: "2025-03-20T00:00:00.000Z",
+      author: { username: "user's_name" },
+    };
+    expect(bookmarkFilename(specialTweet)).toBe("2025-03-20-users_name-222.md");
   });
 });

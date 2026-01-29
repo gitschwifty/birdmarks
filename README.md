@@ -106,9 +106,9 @@ bookmarks/
 ├── articles/
 │   └── Article-Title.md
 ├── 2024-01/                         # Bookmarks from January 2024
-│   └── 2024-01-15-username-123.md   # References ../assets/abc123.jpg
+│   └── 15-username-123.md           # References ../assets/abc123.jpg
 ├── 2024-02/                         # Bookmarks from February 2024
-│   └── 2024-02-03-username-456.md
+│   └── 03-username-456.md
 ├── exporter-state.json
 └── errors.json
 ```

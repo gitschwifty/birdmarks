@@ -282,7 +282,7 @@ export async function writeBookmarkMarkdown(
   outputDir: string,
   useDateFolders?: boolean
 ): Promise<string> {
-  const filename = bookmarkFilename(bookmark.originalTweet);
+  const filename = bookmarkFilename(bookmark.originalTweet, useDateFolders);
 
   let filepath: string;
   let relativePath: string;
