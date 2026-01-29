@@ -4,22 +4,47 @@ Export your Twitter/X bookmarks to markdown files with full thread expansion, me
 
 ## Requirements
 
-- [Bun](https://bun.sh) runtime (v1.0+)
-- [bird](https://github.com/steipete/bird) CLI installed (`bun add -g @steipete/bird`) (technically not required but easier to test auth with this)
 - Logged into Twitter/X in Chrome, Safari, or Firefox (for cookie authentication)
 
 ## Installation
 
+### Option 1: Download Release (Recommended)
+
+Download the latest release for your platform from the [Releases](https://github.com/gitschwifty/birdmarks/releases) page:
+
+- **macOS Apple Silicon**: `birdmarks-darwin-arm64`
+- **macOS Intel**: `birdmarks-darwin-x64`
+- **Linux**: `birdmarks-linux-x64`
+- **Windows**: `birdmarks-win-x64.exe`
+
+Then make it executable (macOS/Linux):
 ```bash
-git clone https://github.com/yourusername/birdmarks.git
+chmod +x birdmarks-darwin-arm64
+./birdmarks-darwin-arm64 --help
+```
+
+**Note:** These binaries aren't signed, so you may need to:
+- **macOS**: Right-click → Open, or `xattr -d com.apple.quarantine birdmarks-darwin-*`
+- **Windows**: Click "More info" → "Run anyway" on the SmartScreen warning
+
+### Option 2: Build from Source
+
+Requires [Bun](https://bun.sh) runtime (v1.0+):
+
+```bash
+git clone https://github.com/gitschwifty/birdmarks.git
 cd birdmarks
 bun install
+bun run build  # Creates ./birdmarks executable
 ```
 
 ## Usage
 
 ```bash
-# Export to default ./bookmarks directory
+# Using compiled binary
+./birdmarks
+
+# Or with bun (from source)
 bun run src/index.ts
 
 # Export to custom directory
