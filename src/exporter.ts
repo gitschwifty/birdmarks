@@ -305,7 +305,7 @@ export async function exportSingleTweet(
   const processed = await processBookmark(client, tweet, config);
 
   // Write markdown
-  const filename = await writeBookmarkMarkdown(processed, config.outputDir);
+  const filename = await writeBookmarkMarkdown(processed, config.outputDir, config.useDateFolders);
   console.log(`Exported: ${filename}`);
 
   // Fetch any linked articles
@@ -394,7 +394,7 @@ export async function exportBookmarks(
         let alreadyExistCount = 0;
         for (let i = 0; i < checkCount; i++) {
           const tweet = bookmarksPage[i];
-          if (tweet && (await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt))) {
+          if (tweet && (await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt, config.useDateFolders))) {
             alreadyExistCount++;
           }
         }
@@ -409,7 +409,7 @@ export async function exportBookmarks(
           if (!tweet) continue;
 
           // Check if already exported
-          if (await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt)) {
+          if (await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt, config.useDateFolders)) {
             console.log(`Hit already-exported bookmark ${tweet.id}, new bookmarks phase complete.`);
             break newBookmarksLoop;
           }
@@ -445,7 +445,7 @@ export async function exportBookmarks(
               replies: processedReplies,
             };
 
-            await writeBookmarkMarkdown(bookmark, config.outputDir);
+            await writeBookmarkMarkdown(bookmark, config.outputDir, config.useDateFolders);
             console.log(`  Exported (new): ${bookmark.originalTweet.id}`);
             result.exported++;
 
@@ -584,7 +584,7 @@ export async function exportBookmarks(
     let alreadyExistCount = 0;
     for (let i = 0; i < checkCount; i++) {
       const tweet = bookmarksPage[i];
-      if (tweet && (await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt))) {
+      if (tweet && (await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt, config.useDateFolders))) {
         alreadyExistCount++;
       }
     }
@@ -617,7 +617,7 @@ export async function exportBookmarks(
       }
 
       // Check if already exported
-      if (await bookmarkExists(config.outputDir, tweet)) {
+      if (await bookmarkExists(config.outputDir, tweet, config.useDateFolders)) {
         console.log(`Skipping already exported: ${tweet.id}`);
         result.skipped++;
 
@@ -637,7 +637,7 @@ export async function exportBookmarks(
         );
 
         const processed = await processBookmark(client, tweet, config);
-        const filename = await writeBookmarkMarkdown(processed, config.outputDir);
+        const filename = await writeBookmarkMarkdown(processed, config.outputDir, config.useDateFolders);
 
         console.log(`  Exported: ${filename}`);
 

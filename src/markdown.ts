@@ -4,7 +4,7 @@ import type { TweetData } from "@steipete/bird";
 import type { ProcessedTweet, ProcessedBookmark, LocalMedia } from "./types";
 import { processTextLinks, processTextLinksWithMeta, stripLeadingMentions } from "./links";
 import { downloadMedia, ensureAssetsDir } from "./media";
-import { bookmarkFilename, sanitizeFilename } from "./state";
+import { bookmarkFilename, getDateFolder, sanitizeFilename } from "./state";
 
 const ARTICLES_DIR = "articles";
 
@@ -279,12 +279,32 @@ async function extractArticlesFromTweet(
 
 export async function writeBookmarkMarkdown(
   bookmark: ProcessedBookmark,
-  outputDir: string
+  outputDir: string,
+  useDateFolders?: boolean
 ): Promise<string> {
   const filename = bookmarkFilename(bookmark.originalTweet);
-  const filepath = join(outputDir, filename);
 
-  const markdown = generateMarkdown(bookmark);
+  let filepath: string;
+  let relativePath: string;
+
+  if (useDateFolders) {
+    const folder = getDateFolder(bookmark.originalTweet.createdAt);
+    const folderPath = join(outputDir, folder);
+    await mkdir(folderPath, { recursive: true });
+    filepath = join(folderPath, filename);
+    relativePath = join(folder, filename);
+  } else {
+    filepath = join(outputDir, filename);
+    relativePath = filename;
+  }
+
+  let markdown = generateMarkdown(bookmark);
+
+  // Adjust asset paths when using date folders (one level deeper)
+  if (useDateFolders) {
+    markdown = markdown.replace(/\!\[\]\(assets\//g, "![](../assets/");
+  }
+
   await Bun.write(filepath, markdown);
 
   // Extract articles from all tweets (original, thread, replies) and their quoted tweets
@@ -296,7 +316,7 @@ export async function writeBookmarkMarkdown(
     await extractArticlesFromTweet(tweet, outputDir);
   }
 
-  return filename;
+  return relativePath;
 }
 
 // Write article from a linked tweet (fetched via getTweet)

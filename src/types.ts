@@ -49,4 +49,5 @@ export interface ExporterConfig {
   includeReplies: boolean;
   maxPages?: number; // Limit pages per run (undefined = unlimited)
   fetchNewFirst?: boolean; // Fetch new bookmarks before resuming from cursor
+  useDateFolders?: boolean; // Organize bookmarks into yyyy-mm subfolders
 }

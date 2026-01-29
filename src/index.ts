@@ -15,6 +15,7 @@ async function main() {
   let includeReplies = false;
   let maxPages: number | undefined;
   let fetchNewFirst = false;
+  let useDateFolders = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -42,6 +43,8 @@ async function main() {
       if (val) maxPages = parseInt(val, 10);
     } else if (arg === "-N" || arg === "--new-first") {
       fetchNewFirst = true;
+    } else if (arg === "-d" || arg === "--date-folders") {
+      useDateFolders = true;
     } else if (arg === "-h" || arg === "--help") {
       printHelp();
       process.exit(0);
@@ -64,6 +67,7 @@ async function main() {
   console.log(`Include replies: ${includeReplies}`);
   if (maxPages) console.log(`Max pages this run: ${maxPages}`);
   if (fetchNewFirst) console.log(`Fetch new first: enabled`);
+  if (useDateFolders) console.log(`Date folders: enabled (yyyy-mm/)`);
   console.log("");
 
   // Ensure output directory exists
@@ -113,6 +117,7 @@ async function main() {
     includeReplies,
     maxPages,
     fetchNewFirst,
+    useDateFolders,
   };
 
   try {
@@ -181,6 +186,7 @@ Options:
   -o, --output <dir>   Output directory (alternative to positional arg)
   -n, --max-pages <n>  Limit pages fetched this run (to avoid rate limits)
   -N, --new-first      Fetch new bookmarks first before resuming from cursor
+  -d, --date-folders   Organize bookmarks into yyyy-mm subfolders
   -r, --replies        Include replies from other users (default: off)
   --quote-depth <n>    Maximum depth for quoted tweets (default: 3, -1 for unlimited)
   --cookie-source <s>  Browser to get cookies from: safari, chrome, firefox

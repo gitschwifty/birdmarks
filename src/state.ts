@@ -99,6 +99,15 @@ export function sanitizeFilename(str: string): string {
   );
 }
 
+// Get yyyy-mm folder name from a date
+export function getDateFolder(createdAt?: string): string {
+  if (!createdAt) return "unknown-date";
+  const date = new Date(createdAt);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
 export function bookmarkFilename(tweet: {
   id: string;
   createdAt?: string;
@@ -116,9 +125,15 @@ export function bookmarkFilename(tweet: {
 
 export async function bookmarkExists(
   outputDir: string,
-  tweet: { id: string; createdAt?: string; author: { username: string } }
+  tweet: { id: string; createdAt?: string; author: { username: string } },
+  useDateFolders?: boolean
 ): Promise<boolean> {
   const filename = bookmarkFilename(tweet);
+  if (useDateFolders) {
+    const folder = getDateFolder(tweet.createdAt);
+    const filepath = join(outputDir, folder, filename);
+    return await Bun.file(filepath).exists();
+  }
   const filepath = join(outputDir, filename);
   return await Bun.file(filepath).exists();
 }
@@ -127,16 +142,23 @@ export async function bookmarkExists(
 export async function bookmarkExistsById(
   outputDir: string,
   tweetId: string,
-  createdAt?: string
+  createdAt?: string,
+  useDateFolders?: boolean
 ): Promise<boolean> {
   // Use date prefix to narrow search if available
   let pattern: string;
   if (createdAt) {
     const date = new Date(createdAt);
     const datePart = date.toISOString().split("T")[0] ?? "unknown-date";
-    pattern = `${datePart}-*-${tweetId}.md`;
+    if (useDateFolders) {
+      const folder = getDateFolder(createdAt);
+      pattern = `${folder}/${datePart}-*-${tweetId}.md`;
+    } else {
+      pattern = `${datePart}-*-${tweetId}.md`;
+    }
   } else {
-    pattern = `*-${tweetId}.md`;
+    // Without date, need to search more broadly
+    pattern = useDateFolders ? `*/*-${tweetId}.md` : `*-${tweetId}.md`;
   }
 
   const glob = new Bun.Glob(pattern);
