@@ -352,9 +352,21 @@ export async function exportBookmarks(
   // If fetchNewFirst is enabled and we have resume state, fetch new bookmarks from the top first
   if (config.fetchNewFirst && hasResumeState) {
     console.log("\n=== Fetching new bookmarks first ===\n");
+
+    // The stopping point is the first tweet we exported when this run started
+    // Fall back to previousFirstExported if currentRunFirstExported isn't set (old state)
+    const newPhaseStopAt = state.currentRunFirstExported ?? state.previousFirstExported;
+    if (newPhaseStopAt) {
+      console.log(`Will stop when reaching: ${newPhaseStopAt}`);
+    } else {
+      console.log(`Warning: No stopping point found in state, will process until no new bookmarks`);
+    }
+
     let newPageNum = 0;
     let newCursor: string | undefined = undefined;
     let newPhaseFirstExported: string | undefined;
+    let pagesWithoutNewExports = 0;
+    const MAX_PAGES_WITHOUT_NEW = 2; // Safety: stop after 2 pages with no new exports
 
     newBookmarksLoop: while (true) {
       newPageNum++;
@@ -389,29 +401,31 @@ export async function exportBookmarks(
 
         console.log(`Got ${bookmarksPage.length} bookmarks${newCursor ? ", more available" : ""}`);
 
-        // Check if first 3 already exist - if so, we've caught up
-        const checkCount = Math.min(3, bookmarksPage.length);
-        let alreadyExistCount = 0;
-        for (let i = 0; i < checkCount; i++) {
-          const tweet = bookmarksPage[i];
-          if (tweet && (await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt, config.useDateFolders))) {
-            alreadyExistCount++;
-          }
-        }
-        if (checkCount > 0 && alreadyExistCount === checkCount) {
-          console.log(`First ${checkCount} bookmarks already exported, new bookmarks phase complete.`);
-          break;
-        }
+        // Track exports this page for the safety counter
+        const exportsBeforePage = result.exported;
 
-        // Process bookmarks until we hit an already-exported one
+        // Process bookmarks until we hit the stopping point
         for (let i = 0; i < bookmarksPage.length; i++) {
           const tweet = bookmarksPage[i];
           if (!tweet) continue;
 
-          // Check if already exported
-          if (await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt, config.useDateFolders)) {
-            console.log(`Hit already-exported bookmark ${tweet.id}, new bookmarks phase complete.`);
+          // Check if we've hit the stopping point (first exported from this run)
+          if (newPhaseStopAt && tweet.id === newPhaseStopAt) {
+            console.log(`Hit stopping point ${tweet.id}, new bookmarks phase complete.`);
             break newBookmarksLoop;
+          }
+
+          // Track first seen in new phase (for next run's stopping point)
+          if (!newPhaseFirstExported) {
+            newPhaseFirstExported = tweet.id;
+          }
+
+          // Check if already exported
+          const alreadyExists = await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt, config.useDateFolders);
+          if (alreadyExists) {
+            console.log(`Skipping existing bookmark ${tweet.id}`);
+            result.skipped++;
+            continue; // Skip but keep going - don't break!
           }
 
           console.log(
@@ -445,14 +459,9 @@ export async function exportBookmarks(
               replies: processedReplies,
             };
 
-            await writeBookmarkMarkdown(bookmark, config.outputDir, config.useDateFolders);
-            console.log(`  Exported (new): ${bookmark.originalTweet.id}`);
+            const filename = await writeBookmarkMarkdown(bookmark, config.outputDir, config.useDateFolders);
+            console.log(`  Exported (new): ${filename}`);
             result.exported++;
-
-            // Track first exported in new phase
-            if (!newPhaseFirstExported) {
-              newPhaseFirstExported = tweet.id;
-            }
           } catch (error: unknown) {
             if (error instanceof RateLimitError) {
               console.error(`\n${error.message}. State preserved. Resume later to continue.`);
@@ -468,6 +477,18 @@ export async function exportBookmarks(
               context: `Processing new bookmark from @${tweet.author.username}`,
             });
             result.errors++;
+          }
+        }
+
+        // Check if we exported anything this page
+        const exportsThisPage = result.exported - exportsBeforePage;
+        if (exportsThisPage > 0) {
+          pagesWithoutNewExports = 0;
+        } else {
+          pagesWithoutNewExports++;
+          if (pagesWithoutNewExports >= MAX_PAGES_WITHOUT_NEW) {
+            console.log(`No new exports for ${MAX_PAGES_WITHOUT_NEW} pages, new bookmarks phase complete.`);
+            break;
           }
         }
 
@@ -491,10 +512,10 @@ export async function exportBookmarks(
     if (newPhaseFirstExported) {
       state.currentRunFirstExported = newPhaseFirstExported;
       await saveState(config.outputDir, state);
-      console.log(`Updated first exported to: ${newPhaseFirstExported}`);
+      console.log(`Updated anchor to: ${newPhaseFirstExported}`);
     }
 
-    console.log(`\n=== New bookmarks phase complete (${result.exported} exported) ===`);
+    console.log(`\n=== New bookmarks phase complete (${result.exported} exported, ${result.skipped} skipped) ===`);
     console.log("=== Continuing from saved cursor ===\n");
   }
 
