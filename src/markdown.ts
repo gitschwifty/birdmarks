@@ -4,7 +4,7 @@ import type { TweetData } from "@steipete/bird";
 import type { ProcessedTweet, ProcessedBookmark, LocalMedia } from "./types";
 import { processTextLinks, processTextLinksWithMeta, stripLeadingMentions } from "./links";
 import { downloadMedia, ensureAssetsDir } from "./media";
-import { bookmarkFilename } from "./state";
+import { bookmarkFilename, sanitizeFilename } from "./state";
 
 const ARTICLES_DIR = "articles";
 
@@ -242,10 +242,7 @@ async function generateArticleMarkdown(tweet: TweetData): Promise<{ filename: st
   lines.push(articleText);
 
   // Sanitize title for filename
-  const safeTitle = title
-    .replace(/[<>:"/\\|?*]/g, "") // Remove invalid filename chars
-    .replace(/\s+/g, "-") // Replace spaces with dashes
-    .slice(0, 100); // Limit length
+  const safeTitle = sanitizeFilename(title).slice(0, 100); // Limit length
 
   return {
     filename: `${safeTitle}.md`,

@@ -75,6 +75,29 @@ export async function appendError(
   await Bun.write(errorsPath, JSON.stringify(errors, null, 2));
 }
 
+// Sanitize a string for use in filenames - removes problematic characters
+export function sanitizeFilename(str: string): string {
+  return (
+    str
+      // Replace curly quotes/apostrophes with nothing (cleaner than ASCII equivalents)
+      .replace(/['']/g, "")
+      .replace(/[""]/g, "")
+      // Replace other common Unicode punctuation
+      .replace(/[–—]/g, "-") // en-dash, em-dash
+      .replace(/[…]/g, "") // Unicode ellipsis - just remove
+      .replace(/\.{2,}/g, "") // Multiple dots - remove (avoid extension confusion)
+      // Remove any remaining non-ASCII characters
+      .replace(/[^\x00-\x7F]/g, "")
+      // Remove filesystem-invalid characters (including periods except for extension)
+      .replace(/[<>:"/\\|?*]/g, "")
+      // Replace spaces and multiple dashes with single dash
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      // Remove leading/trailing dashes and dots
+      .replace(/^[-.]+|[-.]+$/g, "")
+  );
+}
+
 export function bookmarkFilename(tweet: {
   id: string;
   createdAt?: string;
@@ -86,7 +109,8 @@ export function bookmarkFilename(tweet: {
     const date = new Date(tweet.createdAt);
     datePart = date.toISOString().split("T")[0] ?? "unknown-date"; // yyyy-mm-dd
   }
-  return `${datePart}-${tweet.author.username}-${tweet.id}.md`;
+  const safeUsername = sanitizeFilename(tweet.author.username);
+  return `${datePart}-${safeUsername}-${tweet.id}.md`;
 }
 
 export async function bookmarkExists(
