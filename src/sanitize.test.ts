@@ -115,6 +115,22 @@ describe("sanitizeFilename", () => {
     expect(sanitizeFilename("Hello!World")).toBe("HelloWorld");
   });
 
+  test("removes commas", () => {
+    expect(sanitizeFilename("hello,world")).toBe("helloworld");
+    expect(sanitizeFilename("one, two, three")).toBe("one-two-three");
+  });
+
+  // Unicode arrows/symbols (caught by non-ASCII removal)
+  test("removes Unicode arrows", () => {
+    expect(sanitizeFilename("From-Context-Graphs-→-Continual-Learning")).toBe(
+      "From-Context-Graphs-Continual-Learning"
+    );
+  });
+
+  test("removes Unicode stars/symbols", () => {
+    expect(sanitizeFilename("⚝-fine-tuning-⚝")).toBe("fine-tuning");
+  });
+
   // Spaces and dashes
   test("replaces spaces with dashes", () => {
     expect(sanitizeFilename("hello world")).toBe("hello-world");
