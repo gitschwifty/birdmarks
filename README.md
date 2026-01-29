@@ -57,7 +57,7 @@ bun run src/index.ts <tweetID> # auto-detected if all digits
 # Include replies from other users (not just the author's thread)
 bun run src/index.ts --replies
 
-# Organize bookmarks into yyyy-mm subfolders
+# Organize bookmarks into yyyy/mm/ subfolders
 bun run src/index.ts --date-folders
 
 # Specify browser for cookie source
@@ -76,7 +76,7 @@ bun run src/index.ts --quote-depth 5
 | `-t, --tweet <id>` | Process a single tweet instead of all bookmarks |
 | `-n, --max-pages <n>` | Limit pages fetched this run (to avoid rate limits) |
 | `-N, --new-first` | Fetch new bookmarks first before resuming from cursor |
-| `-d, --date-folders` | Organize bookmarks into `yyyy-mm/` subfolders |
+| `-d, --date-folders` | Organize bookmarks into `yyyy/mm/` subfolders |
 | `-r, --replies` | Include replies from other users (default: off) |
 | `--quote-depth <n>` | Maximum depth for expanding quoted tweets (default: 3, -1 for unlimited) |
 | `--cookie-source <browser>` | Browser to get cookies from: `safari`, `chrome`, `firefox` |
@@ -97,7 +97,7 @@ bookmarks/
 └── errors.json                      # Failed fetches for manual review
 ```
 
-With `--date-folders` flag, bookmarks are organized by month:
+With `--date-folders` flag, bookmarks are organized by year and month:
 
 ```
 bookmarks/
@@ -105,10 +105,11 @@ bookmarks/
 │   └── abc123.jpg
 ├── articles/
 │   └── Article-Title.md
-├── 2024-01/                         # Bookmarks from January 2024
-│   └── 15-username-123.md           # References ../assets/abc123.jpg
-├── 2024-02/                         # Bookmarks from February 2024
-│   └── 03-username-456.md
+├── 2024/
+│   ├── 01/                          # January 2024
+│   │   └── 15-username-123.md       # References ../../assets/abc123.jpg
+│   └── 02/                          # February 2024
+│       └── 03-username-456.md
 ├── exporter-state.json
 └── errors.json
 ```

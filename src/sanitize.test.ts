@@ -189,16 +189,16 @@ describe("sanitizeFilename", () => {
 });
 
 describe("getDateFolder", () => {
-  test("returns yyyy-mm format for valid date", () => {
-    expect(getDateFolder("2025-01-15T12:30:00.000Z")).toBe("2025-01");
-    expect(getDateFolder("2024-12-31T23:59:59.999Z")).toBe("2024-12");
+  test("returns yyyy/mm format for valid date", () => {
+    expect(getDateFolder("2025-01-15T12:30:00.000Z")).toBe("2025/01");
+    expect(getDateFolder("2024-12-31T23:59:59.999Z")).toBe("2024/12");
   });
 
   test("handles dates near month boundaries correctly (UTC)", () => {
     // This is Dec 31 in UTC
-    expect(getDateFolder("2024-12-31T23:59:59.000Z")).toBe("2024-12");
+    expect(getDateFolder("2024-12-31T23:59:59.000Z")).toBe("2024/12");
     // This is Jan 1 in UTC
-    expect(getDateFolder("2025-01-01T00:00:00.000Z")).toBe("2025-01");
+    expect(getDateFolder("2025-01-01T00:00:00.000Z")).toBe("2025/01");
   });
 
   test("returns unknown-date for undefined", () => {
@@ -206,8 +206,8 @@ describe("getDateFolder", () => {
   });
 
   test("pads single-digit months with leading zero", () => {
-    expect(getDateFolder("2025-05-01T00:00:00.000Z")).toBe("2025-05");
-    expect(getDateFolder("2025-09-15T12:00:00.000Z")).toBe("2025-09");
+    expect(getDateFolder("2025-05-01T00:00:00.000Z")).toBe("2025/05");
+    expect(getDateFolder("2025-09-15T12:00:00.000Z")).toBe("2025/09");
   });
 });
 

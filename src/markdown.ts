@@ -300,9 +300,9 @@ export async function writeBookmarkMarkdown(
 
   let markdown = generateMarkdown(bookmark);
 
-  // Adjust asset paths when using date folders (one level deeper)
+  // Adjust asset paths when using date folders (two levels deeper: yyyy/mm/)
   if (useDateFolders) {
-    markdown = markdown.replace(/\!\[\]\(assets\//g, "![](../assets/");
+    markdown = markdown.replace(/\!\[\]\(assets\//g, "![](../../assets/");
   }
 
   await Bun.write(filepath, markdown);

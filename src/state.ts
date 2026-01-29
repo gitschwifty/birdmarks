@@ -99,13 +99,13 @@ export function sanitizeFilename(str: string): string {
   );
 }
 
-// Get yyyy-mm folder name from a date
+// Get yyyy/mm folder path from a date
 export function getDateFolder(createdAt?: string): string {
   if (!createdAt) return "unknown-date";
   const date = new Date(createdAt);
   const year = date.getUTCFullYear();
   const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
+  return `${year}/${month}`;
 }
 
 export function bookmarkFilename(
