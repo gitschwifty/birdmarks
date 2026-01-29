@@ -88,8 +88,9 @@ export function sanitizeFilename(str: string): string {
       .replace(/\.{2,}/g, "") // Multiple dots - remove (avoid extension confusion)
       // Remove any remaining non-ASCII characters
       .replace(/[^\x00-\x7F]/g, "")
-      // Remove filesystem-invalid characters (including periods except for extension)
-      .replace(/[<>:"/\\|?*]/g, "")
+      // Remove filesystem-invalid characters and Obsidian link-breaking characters
+      // Obsidian: # (tags/headings), | (alias), [] (links), ^ (block refs), () (annoying), ! (embeds)
+      .replace(/[<>:"/\\|?*#\[\]^()!]/g, "")
       // Replace spaces and multiple dashes with single dash
       .replace(/\s+/g, "-")
       .replace(/-+/g, "-")

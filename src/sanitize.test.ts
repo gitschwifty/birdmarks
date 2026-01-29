@@ -92,6 +92,29 @@ describe("sanitizeFilename", () => {
     expect(sanitizeFilename("a*b")).toBe("ab");
   });
 
+  // Obsidian link-breaking characters
+  test("removes hash (Obsidian tags/headings)", () => {
+    expect(sanitizeFilename("section#heading")).toBe("sectionheading");
+  });
+
+  test("removes square brackets (Obsidian links)", () => {
+    expect(sanitizeFilename("[[wikilink]]")).toBe("wikilink");
+    expect(sanitizeFilename("a[b]c")).toBe("abc");
+  });
+
+  test("removes caret (Obsidian block refs)", () => {
+    expect(sanitizeFilename("block^ref")).toBe("blockref");
+  });
+
+  test("removes parentheses", () => {
+    expect(sanitizeFilename("function(arg)")).toBe("functionarg");
+    expect(sanitizeFilename("(test)")).toBe("test");
+  });
+
+  test("removes exclamation mark (Obsidian embeds)", () => {
+    expect(sanitizeFilename("Hello!World")).toBe("HelloWorld");
+  });
+
   // Spaces and dashes
   test("replaces spaces with dashes", () => {
     expect(sanitizeFilename("hello world")).toBe("hello-world");
