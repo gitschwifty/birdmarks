@@ -4,7 +4,9 @@
       "Bash(bun test:*)",
       "Bash(bun build:*)",
       "Bash(bun run:*)",
-      "Bash(bun:*)"
+      "Bash(bun:*)",
+      "Bash(bunx tsc:*)",
+      "Bash(./birdmarks:*)"
     ]
   }
 }
