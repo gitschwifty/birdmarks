@@ -433,35 +433,21 @@ export async function exportBookmarks(
           );
 
           try {
-            const { threadTweets, replies } = await withRateLimitCheck(
-              () => expandThread(client, tweet, config.includeReplies),
-              `expanding thread ${tweet.id}`
-            );
+            // Use processBookmark which handles article re-fetching
+            const processed = await processBookmark(client, tweet, config);
 
-            // Expand quoted tweets
-            const expandedOriginal = await expandQuotedTweets(client, tweet, config.quoteDepth);
-            const expandedThreadTweets = await Promise.all(
-              threadTweets.map((t) => expandQuotedTweets(client, t, config.quoteDepth))
-            );
-
-            // Process all tweets
-            const processedTweet = await processTweet(expandedOriginal, config.outputDir);
-            const processedThread = await Promise.all(
-              expandedThreadTweets.map((t) => processTweet(t, config.outputDir))
-            );
-            const processedReplies = await Promise.all(
-              replies.map((t) => processTweet(t, config.outputDir))
-            );
-
-            const bookmark: ProcessedBookmark = {
-              originalTweet: processedTweet,
-              threadTweets: processedThread,
-              replies: processedReplies,
-            };
-
-            const filename = await writeBookmarkMarkdown(bookmark, config.outputDir, config.useDateFolders);
+            const filename = await writeBookmarkMarkdown(processed, config.outputDir, config.useDateFolders);
             console.log(`  Exported (new): ${filename}`);
             result.exported++;
+
+            // Fetch any linked articles
+            const { statusIds, tweetsWithArticleLinks } = collectLinkedIds(processed);
+            if (statusIds.length > 0) {
+              await fetchLinkedArticles(client, statusIds, config);
+            }
+            if (tweetsWithArticleLinks.length > 0) {
+              await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config);
+            }
           } catch (error: unknown) {
             if (error instanceof RateLimitError) {
               console.error(`\n${error.message}. State preserved. Resume later to continue.`);

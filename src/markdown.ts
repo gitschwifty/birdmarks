@@ -115,8 +115,18 @@ function formatTweet(
 
   lines.push("");
 
-  // Tweet text
-  lines.push(tweet.processedText);
+  // Tweet text - for article tweets, show title + preview + link to article file
+  if (tweet.article) {
+    lines.push(`**${tweet.article.title}**`);
+    if (tweet.article.previewText) {
+      lines.push("");
+      lines.push(`> ${tweet.article.previewText}`);
+    }
+    lines.push("");
+    lines.push(`[Read full article](articles/${sanitizeFilename(tweet.article.title).slice(0, 100)}.md)`);
+  } else {
+    lines.push(tweet.processedText);
+  }
 
   // Quoted tweet (use processed version)
   if (tweet.processedQuotedTweet) {
@@ -255,14 +265,21 @@ async function extractArticlesFromTweet(
   tweet: ProcessedTweet | TweetData,
   outputDir: string
 ): Promise<void> {
-  // Write article if this tweet has one
-  if (tweet.article) {
+  // Write article if this tweet has one AND has real content (not just a link)
+  // Bookmarks API returns article metadata but text is just t.co link - skip those
+  // They'll be handled by fetchArticlesFromTweetsWithArticleLinks
+  if (tweet.article && tweet.text.length > 300) {
     const articleResult = await generateArticleMarkdown(tweet);
     if (articleResult) {
       await ensureArticlesDir(outputDir);
       const articlePath = join(outputDir, ARTICLES_DIR, articleResult.filename);
       if (!(await Bun.file(articlePath).exists())) {
-        await Bun.write(articlePath, articleResult.content);
+        try {
+          await Bun.write(articlePath, articleResult.content);
+          console.log(`  Saved article: ${articleResult.filename}`);
+        } catch (error) {
+          console.error(`  Failed to save article ${articleResult.filename}: ${error}`);
+        }
       }
     }
   }
@@ -337,6 +354,11 @@ export async function writeArticleFromTweet(
     return null; // Already written
   }
 
-  await Bun.write(articlePath, articleResult.content);
-  return articleResult.filename;
+  try {
+    await Bun.write(articlePath, articleResult.content);
+    return articleResult.filename;
+  } catch (error) {
+    console.error(`  Failed to save article ${articleResult.filename}: ${error}`);
+    return null;
+  }
 }
