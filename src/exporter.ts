@@ -7,9 +7,11 @@ import {
   appendError,
   bookmarkExists,
   bookmarkExistsById,
+  findBookmarkPath,
+  bookmarkHasReplies,
 } from "./state";
 import { expandThread } from "./thread";
-import { processTweet, writeBookmarkMarkdown, writeArticleFromTweet } from "./markdown";
+import { processTweet, writeBookmarkMarkdown, writeArticleFromTweet, generateRepliesSection } from "./markdown";
 import { ensureAssetsDir } from "./media";
 
 const PAGE_DELAY_MS = 2000; // 2 seconds between pages
@@ -20,6 +22,7 @@ interface ExportResult {
   errors: number;
   hitPreviousExport: boolean;
   rateLimited: boolean;
+  backfilled?: number; // Number of bookmarks that had replies backfilled
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -729,6 +732,257 @@ export async function exportBookmarks(
   }
 
   // Finish run - update first exported tracking
+  await finishRun(config.outputDir);
+
+  return result;
+}
+
+// Backfill replies for an existing bookmark
+async function backfillRepliesForBookmark(
+  client: TwitterClient,
+  tweet: TweetData,
+  filepath: string,
+  config: ExporterConfig
+): Promise<boolean> {
+  // Fetch replies (only replies, not thread since it's already in the file)
+  const { replies } = await withRateLimitCheck(
+    () => expandThread(client, tweet, true), // Always fetch replies for backfill
+    `backfilling replies for ${tweet.id}`
+  );
+
+  if (replies.length === 0) {
+    return false; // No replies to backfill
+  }
+
+  // Process replies with skipMedia (we don't want to download media for backfill)
+  const processedReplies = await Promise.all(
+    replies.map((t) => processTweet(t, config.outputDir, { skipMedia: true }))
+  );
+
+  // Generate replies section
+  const repliesSection = generateRepliesSection(processedReplies, config.useDateFolders);
+
+  // Append to existing file
+  const existingContent = await Bun.file(filepath).text();
+  await Bun.write(filepath, existingContent + repliesSection);
+
+  return true;
+}
+
+// Rebuild mode: iterate all bookmarks from beginning, skip existing, optionally backfill replies
+export async function exportBookmarksRebuild(
+  client: TwitterClient,
+  config: ExporterConfig
+): Promise<ExportResult> {
+  const result: ExportResult = {
+    exported: 0,
+    skipped: 0,
+    errors: 0,
+    hitPreviousExport: false,
+    rateLimited: false,
+    backfilled: 0,
+  };
+
+  // Ensure output directory exists
+  await Bun.write(config.outputDir + "/.keep", "");
+  await ensureAssetsDir(config.outputDir);
+
+  // Load state (for resume on rate limit)
+  let state = await loadState(config.outputDir);
+
+  console.log("Starting rebuild mode...");
+  if (config.backfillReplies) {
+    console.log("Backfill replies: enabled");
+  }
+
+  // Start from beginning or resume from saved cursor
+  let pageNum = state.currentPage ?? 0;
+  let pagesFetchedThisRun = 0;
+  let cursor = state.nextCursor; // Resume from cursor if exists (rate limit resume)
+
+  if (cursor) {
+    console.log(`Resuming rebuild from page ${pageNum}, cursor exists...`);
+  } else {
+    console.log("Starting rebuild from beginning (ignoring saved cursor)...");
+    // Clear any existing cursor state for fresh rebuild
+    state.nextCursor = undefined;
+    state.currentPageBookmarks = undefined;
+    state.currentPage = undefined;
+  }
+
+  while (true) {
+    pageNum++;
+    pagesFetchedThisRun++;
+    state.currentPage = pageNum;
+
+    console.log(`Fetching bookmarks page ${pageNum}${cursor ? " (from cursor)" : ""}...`);
+
+    try {
+      const bookmarksResult = await withRateLimitCheck(
+        () => client.getAllBookmarks({ maxPages: 1, cursor }),
+        "fetching bookmarks"
+      );
+
+      if (!bookmarksResult.success) {
+        throw new Error(bookmarksResult.error || "Failed to fetch bookmarks");
+      }
+
+      const bookmarksPage = bookmarksResult.tweets;
+      const nextCursor = bookmarksResult.nextCursor;
+
+      if (bookmarksPage.length === 0) {
+        if (nextCursor) {
+          // Empty page but cursor exists - might be a gap, try continuing
+          console.log("Empty page but cursor exists, continuing...");
+          cursor = nextCursor;
+          state.nextCursor = cursor;
+          await saveState(config.outputDir, state);
+          continue;
+        }
+        console.log("No more bookmarks to process (empty page, no cursor).");
+        break;
+      }
+
+      console.log(`Got ${bookmarksPage.length} bookmarks${nextCursor ? ", more available" : ""}`);
+
+      // Process each bookmark
+      for (let i = 0; i < bookmarksPage.length; i++) {
+        const tweet = bookmarksPage[i];
+        if (!tweet) continue;
+
+        // Check if already exported
+        const existingPath = await findBookmarkPath(
+          config.outputDir,
+          tweet.id,
+          tweet.createdAt,
+          config.useDateFolders
+        );
+
+        if (existingPath) {
+          // Bookmark exists - check for backfill
+          if (config.backfillReplies && config.includeReplies) {
+            const hasReplies = await bookmarkHasReplies(existingPath);
+            if (!hasReplies) {
+              console.log(`Backfilling replies for ${tweet.id}...`);
+              try {
+                const backfilled = await backfillRepliesForBookmark(
+                  client,
+                  tweet,
+                  existingPath,
+                  config
+                );
+                if (backfilled) {
+                  console.log(`  Backfilled replies for ${tweet.id}`);
+                  result.backfilled!++;
+                } else {
+                  console.log(`  No replies found for ${tweet.id}`);
+                }
+              } catch (error) {
+                if (error instanceof RateLimitError) throw error;
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                console.error(`  Error backfilling ${tweet.id}: ${errorMessage}`);
+                await appendError(config.outputDir, {
+                  tweetId: tweet.id,
+                  error: errorMessage,
+                  timestamp: new Date().toISOString(),
+                  context: `Backfilling replies for @${tweet.author.username}`,
+                });
+                result.errors++;
+              }
+            } else {
+              console.log(`Skipping ${tweet.id} (already has replies)`);
+            }
+          } else {
+            console.log(`Skipping existing: ${tweet.id}`);
+          }
+          result.skipped++;
+          continue;
+        }
+
+        // New bookmark - full export
+        console.log(
+          `Processing new bookmark ${i + 1}/${bookmarksPage.length}: @${tweet.author.username} - ${tweet.text.slice(0, 50)}...`
+        );
+
+        try {
+          const processed = await processBookmark(client, tweet, config);
+          const filename = await writeBookmarkMarkdown(processed, config.outputDir, config.useDateFolders);
+          console.log(`  Exported: ${filename}`);
+          result.exported++;
+
+          // Fetch any linked articles
+          const { statusIds, tweetsWithArticleLinks } = collectLinkedIds(processed);
+          if (statusIds.length > 0) {
+            await fetchLinkedArticles(client, statusIds, config);
+          }
+          if (tweetsWithArticleLinks.length > 0) {
+            await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config);
+          }
+        } catch (error) {
+          if (error instanceof RateLimitError) {
+            // Save cursor for resume
+            state.nextCursor = cursor;
+            await saveState(config.outputDir, state);
+            console.error(`\n${error.message}. State saved. Resume rebuild later to continue.`);
+            result.rateLimited = true;
+            return result;
+          }
+
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error(`  Error processing ${tweet.id}: ${errorMessage}`);
+          await appendError(config.outputDir, {
+            tweetId: tweet.id,
+            error: errorMessage,
+            timestamp: new Date().toISOString(),
+            context: `Processing bookmark from @${tweet.author.username}`,
+          });
+          result.errors++;
+        }
+      }
+
+      // Save cursor after each page (for resume on rate limit)
+      cursor = nextCursor;
+      state.nextCursor = cursor;
+      state.currentPageBookmarks = undefined;
+      await saveState(config.outputDir, state);
+
+      // Log page summary
+      console.log(
+        `\n--- Page ${pageNum} complete | Total: ${result.exported} exported, ${result.skipped} skipped, ${result.backfilled} backfilled, ${result.errors} errors ---\n`
+      );
+
+      // Check max pages limit
+      if (config.maxPages && pagesFetchedThisRun >= config.maxPages) {
+        if (nextCursor) {
+          console.log(`Reached max pages limit (${config.maxPages}). State saved. Run again to continue rebuild.`);
+          return result;
+        } else {
+          console.log(`Reached max pages limit (${config.maxPages}), but no more pages available anyway.`);
+        }
+        break;
+      }
+
+      // Move to next page
+      if (!nextCursor) {
+        console.log("No more pages available.");
+        break;
+      }
+
+      console.log(`Waiting ${PAGE_DELAY_MS / 1000}s before next page...`);
+      await sleep(PAGE_DELAY_MS);
+    } catch (error) {
+      if (error instanceof RateLimitError) {
+        state.nextCursor = cursor;
+        await saveState(config.outputDir, state);
+        console.error(`\n${error.message}. State saved. Resume rebuild later to continue.`);
+        result.rateLimited = true;
+        return result;
+      }
+      throw error;
+    }
+  }
+
+  // Clear state on successful completion
   await finishRun(config.outputDir);
 
   return result;

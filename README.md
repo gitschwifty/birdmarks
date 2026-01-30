@@ -65,6 +65,12 @@ bun run src/index.ts --cookie-source firefox
 
 # Adjust quote tweet depth (default: 3)
 bun run src/index.ts --quote-depth 5
+
+# Rebuild mode: iterate all bookmarks from beginning, skip existing
+bun run src/index.ts --rebuild
+
+# Rebuild with reply backfilling (add replies to existing bookmarks that don't have them)
+bun run src/index.ts --rebuild --backfill-replies --replies
 ```
 
 ### Options
@@ -78,6 +84,8 @@ bun run src/index.ts --quote-depth 5
 | `-N, --new-first` | Fetch new bookmarks first before resuming from cursor |
 | `-d, --date-folders` | Organize bookmarks into `yyyy/mm/` subfolders |
 | `-r, --replies` | Include replies from other users (default: off) |
+| `-R, --rebuild` | Iterate all bookmarks from beginning (saves cursor for resume) |
+| `-B, --backfill-replies` | Backfill missing replies on existing bookmarks (use with `-R -r`) |
 | `--quote-depth <n>` | Maximum depth for expanding quoted tweets (default: 3, -1 for unlimited) |
 | `--cookie-source <browser>` | Browser to get cookies from: `safari`, `chrome`, `firefox` |
 | `-h, --help` | Show help message |
@@ -120,11 +128,12 @@ bookmarks/
 - **Quote tweets** - Recursively fetches nested quoted tweets
 - **Replies** - Optionally captures top-level replies from other users (use `--replies` flag)
 - **Media** - Downloads images to local `assets/` folder
-- **Articles** - Extracts Twitter articles to `articles/` subfolder
+- **Articles** - Extracts Twitter articles to `articles/` subfolder with proper formatting in quoted tweets and replies
 - **Link resolution** - Expands t.co URLs and fetches page titles
 - **Resume support** - Saves state on rate limit, resume by running again
 - **Incremental export** - Skips already-exported bookmarks
 - **Single tweet mode** - Process a single tweet by ID for testing or re-running errors
+- **Rebuild mode** - Iterate all bookmarks from beginning, optionally backfilling replies on existing bookmarks
 
 ## Rate Limiting
 

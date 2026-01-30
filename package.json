@@ -1,6 +1,6 @@
 {
   "name": "bird-bookmarks",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Export Twitter bookmarks to markdown with thread expansion",
   "module": "src/index.ts",
   "type": "module",

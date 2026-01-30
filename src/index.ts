@@ -1,7 +1,7 @@
 import { resolve } from "path";
 import { mkdir } from "fs/promises";
 import { TwitterClient, resolveCredentials } from "@steipete/bird";
-import { exportBookmarks, exportSingleTweet } from "./exporter";
+import { exportBookmarks, exportSingleTweet, exportBookmarksRebuild } from "./exporter";
 import type { ExporterConfig } from "./types";
 
 async function main() {
@@ -16,6 +16,8 @@ async function main() {
   let maxPages: number | undefined;
   let fetchNewFirst = false;
   let useDateFolders = false;
+  let rebuildMode = false;
+  let backfillReplies = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -45,6 +47,10 @@ async function main() {
       fetchNewFirst = true;
     } else if (arg === "-d" || arg === "--date-folders") {
       useDateFolders = true;
+    } else if (arg === "-R" || arg === "--rebuild") {
+      rebuildMode = true;
+    } else if (arg === "-B" || arg === "--backfill-replies") {
+      backfillReplies = true;
     } else if (arg === "-h" || arg === "--help") {
       printHelp();
       process.exit(0);
@@ -67,7 +73,9 @@ async function main() {
   console.log(`Include replies: ${includeReplies}`);
   if (maxPages) console.log(`Max pages this run: ${maxPages}`);
   if (fetchNewFirst) console.log(`Fetch new first: enabled`);
-  if (useDateFolders) console.log(`Date folders: enabled (yyyy-mm/)`);
+  if (useDateFolders) console.log(`Date folders: enabled (yyyy/mm/)`);
+  if (rebuildMode) console.log(`Rebuild mode: enabled`);
+  if (backfillReplies) console.log(`Backfill replies: enabled`);
   console.log("");
 
   // Ensure output directory exists
@@ -118,6 +126,8 @@ async function main() {
     maxPages,
     fetchNewFirst,
     useDateFolders,
+    rebuildMode,
+    backfillReplies,
   };
 
   try {
@@ -141,13 +151,16 @@ async function main() {
     }
 
     // Full bookmarks export
-    const result = await exportBookmarks(client, config);
+    const result = rebuildMode
+      ? await exportBookmarksRebuild(client, config)
+      : await exportBookmarks(client, config);
 
     console.log("");
     if (result.rateLimited) {
       console.log("=== Export Paused (Rate Limited) ===");
       console.log(`Exported: ${result.exported}`);
       console.log(`Skipped (already exists): ${result.skipped}`);
+      if (result.backfilled !== undefined) console.log(`Backfilled replies: ${result.backfilled}`);
       console.log(`Errors: ${result.errors}`);
       console.log("\nRun again later to resume from where you left off.");
       process.exit(0); // Clean exit - state is saved
@@ -155,6 +168,7 @@ async function main() {
       console.log("=== Export Complete ===");
       console.log(`Exported: ${result.exported}`);
       console.log(`Skipped (already exists): ${result.skipped}`);
+      if (result.backfilled !== undefined) console.log(`Backfilled replies: ${result.backfilled}`);
       console.log(`Errors: ${result.errors}`);
       if (result.hitPreviousExport) {
         console.log("Stopped at previously exported bookmark.");
@@ -188,6 +202,8 @@ Options:
   -N, --new-first      Fetch new bookmarks first before resuming from cursor
   -d, --date-folders   Organize bookmarks into yyyy-mm subfolders
   -r, --replies        Include replies from other users (default: off)
+  -R, --rebuild        Iterate all bookmarks from beginning (saves cursor for resume)
+  -B, --backfill-replies  Backfill missing replies on existing bookmarks (use with -R)
   --quote-depth <n>    Maximum depth for quoted tweets (default: 3, -1 for unlimited)
   --cookie-source <s>  Browser to get cookies from: safari, chrome, firefox
   -h, --help           Show this help message

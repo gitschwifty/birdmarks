@@ -92,19 +92,24 @@ export async function expandThread(
     return { threadTweets, replies: [] };
   }
 
-  // Filter replies: exclude any that are actually part of the thread
-  // A tweet is part of the thread if:
-  // 1. It's in threadTweets (by ID)
-  // 2. It's by the author and is a reply to any thread tweet
+  // Filter replies: only include tweets that are direct replies TO the thread
+  // The API returns the entire conversation including parent/ancestor tweets,
+  // so we must explicitly check that each reply's inReplyToStatusId is in our thread
   const threadTweetIds = new Set([originalTweet.id, ...threadTweets.map((t) => t.id)]);
 
   const replies = potentialReplies.filter((tweet) => {
     // Exclude if this tweet is in the thread
     if (threadTweetIds.has(tweet.id)) return false;
 
-    // Exclude if this is the author replying to a thread tweet
+    // Only include if this is a reply TO one of the thread tweets
+    // This excludes parent/ancestor tweets (which don't have inReplyToStatusId pointing to our thread)
+    if (!tweet.inReplyToStatusId || !threadTweetIds.has(tweet.inReplyToStatusId)) {
+      return false;
+    }
+
+    // Exclude if this is the author replying to a thread tweet (those are thread continuations, not replies)
     const isByAuthor = tweet.author.username.toLowerCase() === authorUsername;
-    if (isByAuthor && tweet.inReplyToStatusId && threadTweetIds.has(tweet.inReplyToStatusId)) {
+    if (isByAuthor) {
       return false;
     }
 

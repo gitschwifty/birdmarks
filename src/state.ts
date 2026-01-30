@@ -176,3 +176,44 @@ export async function bookmarkExistsById(
   }
   return false;
 }
+
+// Find the path to an existing bookmark file by tweet ID
+export async function findBookmarkPath(
+  outputDir: string,
+  tweetId: string,
+  createdAt?: string,
+  useDateFolders?: boolean
+): Promise<string | null> {
+  // Use date prefix to narrow search if available
+  let pattern: string;
+  if (createdAt) {
+    const date = new Date(createdAt);
+    if (useDateFolders) {
+      const folder = getDateFolder(createdAt);
+      const day = String(date.getUTCDate()).padStart(2, "0");
+      pattern = `${folder}/${day}-*-${tweetId}.md`;
+    } else {
+      const datePart = date.toISOString().split("T")[0] ?? "unknown-date";
+      pattern = `${datePart}-*-${tweetId}.md`;
+    }
+  } else {
+    // Without date, need to search more broadly
+    pattern = useDateFolders ? `*/*-${tweetId}.md` : `*-${tweetId}.md`;
+  }
+
+  const glob = new Bun.Glob(pattern);
+  for await (const path of glob.scan(outputDir)) {
+    return join(outputDir, path); // Return full path
+  }
+  return null;
+}
+
+// Check if a bookmark file already has a Replies section
+export async function bookmarkHasReplies(filepath: string): Promise<boolean> {
+  const file = Bun.file(filepath);
+  if (!(await file.exists())) {
+    return false;
+  }
+  const content = await file.text();
+  return content.includes("## Replies");
+}

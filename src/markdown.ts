@@ -13,25 +13,53 @@ async function ensureArticlesDir(outputDir: string): Promise<void> {
   await mkdir(articlesPath, { recursive: true });
 }
 
+// Shared helper for formatting article content in tweets
+function formatArticleContent(tweet: ProcessedTweet, prefix: string = ""): string[] {
+  if (!tweet.article) return [];
+  const lines: string[] = [];
+  lines.push(`${prefix}**${tweet.article.title}**`);
+  if (tweet.article.previewText) {
+    lines.push(`${prefix}`);
+    lines.push(`${prefix}> ${tweet.article.previewText}`);
+  }
+  lines.push(`${prefix}`);
+  lines.push(`${prefix}[Read full article](articles/${sanitizeFilename(tweet.article.title).slice(0, 100)}.md)`);
+  return lines;
+}
+
+export interface ProcessTweetOptions {
+  skipMedia?: boolean; // Skip downloading media, use original URLs instead
+}
+
 // Recursively process a tweet and its quoted tweets
 export async function processTweet(
   tweet: TweetData,
-  outputDir: string
+  outputDir: string,
+  options?: ProcessTweetOptions
 ): Promise<ProcessedTweet> {
   // Process text (unescape, resolve links)
   const textResult = await processTextLinksWithMeta(tweet.text);
 
-  // Download media
+  // Download media (or use original URLs if skipMedia is true)
   let localMedia: LocalMedia[] = [];
   if (tweet.media && tweet.media.length > 0) {
-    await ensureAssetsDir(outputDir);
-    localMedia = await downloadMedia(tweet.media, outputDir);
+    if (options?.skipMedia) {
+      // Use original URLs as placeholder (existing ![](localPath) syntax works)
+      localMedia = tweet.media.map((m) => ({
+        type: m.type,
+        localPath: m.url,
+        originalUrl: m.url,
+      }));
+    } else {
+      await ensureAssetsDir(outputDir);
+      localMedia = await downloadMedia(tweet.media, outputDir);
+    }
   }
 
   // Recursively process quoted tweet if present
   let processedQuotedTweet: ProcessedTweet | undefined;
   if (tweet.quotedTweet) {
-    processedQuotedTweet = await processTweet(tweet.quotedTweet, outputDir);
+    processedQuotedTweet = await processTweet(tweet.quotedTweet, outputDir, options);
   }
 
   // Collect all linked IDs (from this tweet and quoted tweets)
@@ -61,10 +89,15 @@ function formatProcessedQuotedTweet(tweet: ProcessedTweet, depth: number = 1): s
   lines.push(`${prefix}**@${tweet.author.username}** (${tweet.author.name})`);
   lines.push(`${prefix}`);
 
-  // Add processed text, prefixing each line
-  const textLines = tweet.processedText.split("\n");
-  for (const line of textLines) {
-    lines.push(`${prefix}${line}`);
+  // For article tweets, show title + preview + link to article file
+  if (tweet.article) {
+    lines.push(...formatArticleContent(tweet, prefix));
+  } else {
+    // Add processed text, prefixing each line
+    const textLines = tweet.processedText.split("\n");
+    for (const line of textLines) {
+      lines.push(`${prefix}${line}`);
+    }
   }
 
   // Handle nested quoted tweet (use processed version)
@@ -117,13 +150,7 @@ function formatTweet(
 
   // Tweet text - for article tweets, show title + preview + link to article file
   if (tweet.article) {
-    lines.push(`**${tweet.article.title}**`);
-    if (tweet.article.previewText) {
-      lines.push("");
-      lines.push(`> ${tweet.article.previewText}`);
-    }
-    lines.push("");
-    lines.push(`[Read full article](articles/${sanitizeFilename(tweet.article.title).slice(0, 100)}.md)`);
+    lines.push(...formatArticleContent(tweet));
   } else {
     lines.push(tweet.processedText);
   }
@@ -145,7 +172,7 @@ function formatTweet(
   return lines.join("\n");
 }
 
-function formatReply(tweet: ProcessedTweet): string {
+export function formatReply(tweet: ProcessedTweet): string {
   const lines: string[] = [];
 
   lines.push(`**@${tweet.author.username}** (${tweet.author.name})`);
@@ -153,8 +180,14 @@ function formatReply(tweet: ProcessedTweet): string {
     `[View on Twitter](https://twitter.com/${tweet.author.username}/status/${tweet.id})`
   );
   lines.push("");
-  // Strip leading @mentions from replies (they're just reply-to indicators)
-  lines.push(stripLeadingMentions(tweet.processedText));
+
+  // For article tweets, show title + preview + link to article file
+  if (tweet.article) {
+    lines.push(...formatArticleContent(tweet));
+  } else {
+    // Strip leading @mentions from replies (they're just reply-to indicators)
+    lines.push(stripLeadingMentions(tweet.processedText));
+  }
 
   // Quoted tweet in reply (use processed version)
   if (tweet.processedQuotedTweet) {
@@ -361,4 +394,37 @@ export async function writeArticleFromTweet(
     console.error(`  Failed to save article ${articleResult.filename}: ${error}`);
     return null;
   }
+}
+
+// Generate a replies section for appending to an existing bookmark file
+export function generateRepliesSection(
+  replies: ProcessedTweet[],
+  useDateFolders?: boolean
+): string {
+  if (replies.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push("");
+  lines.push("## Replies");
+  lines.push("");
+
+  for (let i = 0; i < replies.length; i++) {
+    const reply = replies[i];
+    if (!reply) continue;
+    if (i > 0) {
+      lines.push("");
+      lines.push("---");
+      lines.push("");
+    }
+    lines.push(formatReply(reply));
+  }
+
+  let markdown = lines.join("\n");
+
+  // Adjust asset paths when using date folders (two levels deeper: yyyy/mm/)
+  if (useDateFolders) {
+    markdown = markdown.replace(/\!\[\]\(assets\//g, "![](../../assets/");
+  }
+
+  return markdown;
 }
