@@ -18,6 +18,7 @@ async function main() {
   let useDateFolders = false;
   let rebuildMode = false;
   let backfillReplies = false;
+  let backfillFrontmatter = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -51,6 +52,8 @@ async function main() {
       rebuildMode = true;
     } else if (arg === "-B" || arg === "--backfill-replies") {
       backfillReplies = true;
+    } else if (arg === "-F" || arg === "--backfill-frontmatter") {
+      backfillFrontmatter = true;
     } else if (arg === "-h" || arg === "--help") {
       printHelp();
       process.exit(0);
@@ -76,6 +79,7 @@ async function main() {
   if (useDateFolders) console.log(`Date folders: enabled (yyyy/mm/)`);
   if (rebuildMode) console.log(`Rebuild mode: enabled`);
   if (backfillReplies) console.log(`Backfill replies: enabled`);
+  if (backfillFrontmatter) console.log(`Backfill frontmatter: enabled`);
   console.log("");
 
   // Ensure output directory exists
@@ -128,6 +132,7 @@ async function main() {
     useDateFolders,
     rebuildMode,
     backfillReplies,
+    backfillFrontmatter,
   };
 
   try {
@@ -160,7 +165,8 @@ async function main() {
       console.log("=== Export Paused (Rate Limited) ===");
       console.log(`Exported: ${result.exported}`);
       console.log(`Skipped (already exists): ${result.skipped}`);
-      if (result.backfilled !== undefined) console.log(`Backfilled replies: ${result.backfilled}`);
+      if (result.backfilled) console.log(`Backfilled replies: ${result.backfilled}`);
+      if (result.frontmatterAdded) console.log(`Frontmatter added: ${result.frontmatterAdded}`);
       console.log(`Errors: ${result.errors}`);
       console.log("\nRun again later to resume from where you left off.");
       process.exit(0); // Clean exit - state is saved
@@ -168,7 +174,8 @@ async function main() {
       console.log("=== Export Complete ===");
       console.log(`Exported: ${result.exported}`);
       console.log(`Skipped (already exists): ${result.skipped}`);
-      if (result.backfilled !== undefined) console.log(`Backfilled replies: ${result.backfilled}`);
+      if (result.backfilled) console.log(`Backfilled replies: ${result.backfilled}`);
+      if (result.frontmatterAdded) console.log(`Frontmatter added: ${result.frontmatterAdded}`);
       console.log(`Errors: ${result.errors}`);
       if (result.hitPreviousExport) {
         console.log("Stopped at previously exported bookmark.");
@@ -203,7 +210,8 @@ Options:
   -d, --date-folders   Organize bookmarks into yyyy-mm subfolders
   -r, --replies        Include replies from other users (default: off)
   -R, --rebuild        Iterate all bookmarks from beginning (saves cursor for resume)
-  -B, --backfill-replies  Backfill missing replies on existing bookmarks (use with -R)
+  -B, --backfill-replies     Backfill missing replies on existing bookmarks (use with -R)
+  -F, --backfill-frontmatter Add frontmatter to existing bookmarks (use with -R)
   --quote-depth <n>    Maximum depth for quoted tweets (default: 3, -1 for unlimited)
   --cookie-source <s>  Browser to get cookies from: safari, chrome, firefox
   -h, --help           Show this help message

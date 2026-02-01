@@ -1,9 +1,13 @@
-// Link resolution: resolve redirects and fetch page titles
+// Link resolution: resolve redirects, fetch page titles, extract OG metadata
+
+import { parseOGTags } from "./metadata";
+import type { LinkMetadata, ResolvedUrl } from "./types";
 
 interface ResolvedLink {
   originalUrl: string;
   resolvedUrl: string;
   title?: string;
+  ogMetadata?: LinkMetadata; // OG tags extracted during resolution
 }
 
 // URL regex for t.co shortened URLs only
@@ -48,9 +52,11 @@ export async function resolveLink(url: string): Promise<ResolvedLink> {
 
     result.resolvedUrl = response.url;
 
-    // If it's a different URL, try to get the title
+    // If it's a different URL, fetch content (title + OG metadata)
     if (response.url !== url && response.ok) {
-      result.title = await fetchPageTitle(response.url);
+      const content = await fetchPageContent(response.url);
+      result.title = content.title;
+      result.ogMetadata = content.ogMetadata;
     }
   } catch (error) {
     // HEAD might be blocked, try GET with limited read
@@ -64,7 +70,9 @@ export async function resolveLink(url: string): Promise<ResolvedLink> {
       result.resolvedUrl = response.url;
 
       if (response.ok) {
-        result.title = await fetchPageTitle(response.url);
+        const content = await fetchPageContent(response.url);
+        result.title = content.title;
+        result.ogMetadata = content.ogMetadata;
       }
     } catch {
       // Failed to resolve, keep original URL
@@ -74,7 +82,12 @@ export async function resolveLink(url: string): Promise<ResolvedLink> {
   return result;
 }
 
-async function fetchPageTitle(url: string): Promise<string | undefined> {
+interface PageContent {
+  title?: string;
+  ogMetadata?: LinkMetadata;
+}
+
+async function fetchPageContent(url: string): Promise<PageContent> {
   try {
     const response = await fetch(url, {
       method: "GET",
@@ -87,23 +100,32 @@ async function fetchPageTitle(url: string): Promise<string | undefined> {
       },
     });
 
-    if (!response.ok) return undefined;
+    if (!response.ok) return {};
 
-    // Only read the first chunk to find title
-    const text = await response.text();
-    const titleMatch = text.match(/<title[^>]*>([^<]+)<\/title>/i);
-    const title = titleMatch?.[1];
-    if (title) {
-      // Clean up the title
-      return title
-        .trim()
-        .replace(/\s+/g, " ")
-        .slice(0, 200); // Limit length
+    // Read the page content
+    const html = await response.text();
+
+    // Extract title
+    let title: string | undefined;
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    if (titleMatch?.[1]) {
+      title = titleMatch[1].trim().replace(/\s+/g, " ").slice(0, 200);
     }
+
+    // Extract OG metadata while we have the HTML (single request optimization)
+    const ogMetadata = parseOGTags(url, html, "article");
+
+    return { title, ogMetadata };
   } catch {
-    // Failed to fetch title
+    // Failed to fetch content
   }
-  return undefined;
+  return {};
+}
+
+// Legacy function for backward compatibility
+async function fetchPageTitle(url: string): Promise<string | undefined> {
+  const content = await fetchPageContent(url);
+  return content.title;
 }
 
 export function unescapeText(text: string): string {
@@ -126,6 +148,7 @@ export interface ProcessTextResult {
   text: string;
   linkedStatusIds: string[]; // Twitter status IDs found in links (for article expansion)
   linkedArticleIds: string[]; // Twitter article IDs found (x.com/i/article/...)
+  resolvedUrls: ResolvedUrl[]; // All resolved URLs for metadata extraction
 }
 
 export async function processTextLinks(text: string, skipLinkResolution: boolean = false): Promise<string> {
@@ -138,6 +161,7 @@ export async function processTextLinksWithMeta(text: string, skipLinkResolution:
   let processed = unescapeText(text);
   const linkedStatusIds: string[] = [];
   const linkedArticleIds: string[] = [];
+  const resolvedUrls: ResolvedUrl[] = [];
 
   // Remove Twitter/X photo/video links - media handled separately
   processed = processed.replace(TWITTER_MEDIA_URL_REGEX, "");
@@ -149,12 +173,18 @@ export async function processTextLinksWithMeta(text: string, skipLinkResolution:
 
   // If skipping link resolution (e.g., for articles), just return cleaned text
   if (skipLinkResolution) {
-    return { text: processed.trim(), linkedStatusIds, linkedArticleIds };
+    // Still sanitize hashtags
+    processed = sanitizeHashtags(processed);
+    return { text: processed.trim(), linkedStatusIds, linkedArticleIds, resolvedUrls };
   }
 
   // Find only t.co URLs for resolution
   const urls = processed.match(TCO_URL_REGEX);
-  if (!urls) return { text: processed.trim(), linkedStatusIds, linkedArticleIds };
+  if (!urls) {
+    // Still sanitize hashtags
+    processed = sanitizeHashtags(processed);
+    return { text: processed.trim(), linkedStatusIds, linkedArticleIds, resolvedUrls };
+  }
 
   // Dedupe URLs
   const uniqueUrls = [...new Set(urls)];
@@ -184,6 +214,14 @@ export async function processTextLinksWithMeta(text: string, skipLinkResolution:
       linkedStatusIds.push(statusId);
     }
 
+    // Track resolved URL for metadata extraction (skip Twitter/X internal URLs)
+    if (!isTwitterInternalUrl(resolved.resolvedUrl)) {
+      resolvedUrls.push({
+        url: resolved.resolvedUrl,
+        ogMetadata: resolved.ogMetadata,
+      });
+    }
+
     if (resolved.title && resolved.resolvedUrl !== url) {
       // Replace with markdown link using title
       processed = processed.replace(
@@ -200,9 +238,31 @@ export async function processTextLinksWithMeta(text: string, skipLinkResolution:
     // If URL didn't change, leave it as-is
   }
 
-  return { text: processed.trim(), linkedStatusIds, linkedArticleIds };
+  // Sanitize hashtags to prevent Obsidian tag pollution
+  processed = sanitizeHashtags(processed);
+
+  return { text: processed.trim(), linkedStatusIds, linkedArticleIds, resolvedUrls };
 }
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Check if URL is a Twitter/X internal URL (status, profile, etc.)
+function isTwitterInternalUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return host === "twitter.com" || host === "x.com" || host === "www.twitter.com" || host === "www.x.com";
+  } catch {
+    return false;
+  }
+}
+
+// Wrap hashtags in backticks so they don't become Obsidian tags
+// Applies to all tweets (original, thread, replies, quoted tweets)
+export function sanitizeHashtags(text: string): string {
+  // Match hashtags but avoid already-sanitized ones (in backticks) or in markdown links
+  // This regex matches #word where word starts with a letter/underscore and contains alphanumerics/underscores
+  return text.replace(/(^|[^`\w])#(\w+)/g, "$1`#$2`");
 }

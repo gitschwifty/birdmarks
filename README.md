@@ -71,6 +71,9 @@ bun run src/index.ts --rebuild
 
 # Rebuild with reply backfilling (add replies to existing bookmarks that don't have them)
 bun run src/index.ts --rebuild --backfill-replies --replies
+
+# Rebuild with frontmatter backfilling (add YAML frontmatter to existing bookmarks)
+bun run src/index.ts --rebuild --backfill-frontmatter
 ```
 
 ### Options
@@ -86,6 +89,7 @@ bun run src/index.ts --rebuild --backfill-replies --replies
 | `-r, --replies` | Include replies from other users (default: off) |
 | `-R, --rebuild` | Iterate all bookmarks from beginning (saves cursor for resume) |
 | `-B, --backfill-replies` | Backfill missing replies on existing bookmarks (use with `-R -r`) |
+| `-F, --backfill-frontmatter` | Add YAML frontmatter to existing bookmarks (use with `-R`) |
 | `--quote-depth <n>` | Maximum depth for expanding quoted tweets (default: 3, -1 for unlimited) |
 | `--cookie-source <browser>` | Browser to get cookies from: `safari`, `chrome`, `firefox` |
 | `-h, --help` | Show help message |
@@ -102,8 +106,46 @@ bookmarks/
 ├── articles/                        # Extracted Twitter articles
 │   └── Article-Title.md
 ├── exporter-state.json              # Resume state (pagination cursor)
+├── metadata-cache.json              # Cached link metadata (GitHub, OG tags)
 └── errors.json                      # Failed fetches for manual review
 ```
+
+### Frontmatter
+
+Each bookmark includes YAML frontmatter with metadata:
+
+```yaml
+---
+id: "2016987515279069403"
+author: DanielleFong
+author_name: "Danielle Fong 🔆"
+date: 2026-01-29
+url: https://twitter.com/DanielleFong/status/2016987515279069403
+thread_length: 3
+reply_count: 15
+media_count: 2
+quoted_tweet: "2016985000000000000"
+hashtags:
+  - ClaudeCode
+  - AI
+links:
+  - url: https://github.com/anthropics/claude-code
+    type: github
+    owner: anthropics
+    repo: claude-code
+    description: "CLI for Claude"
+    stars: 12345
+    language: TypeScript
+    topics: ["cli", "ai"]
+  - url: https://example.com/article
+    type: article
+    title: "Article Title"
+    description: "Meta description"
+    site: example.com
+---
+```
+
+Link metadata is cached locally (`metadata-cache.json`) with a 7-day TTL to avoid redundant API calls.
 
 With `--date-folders` flag, bookmarks are organized by year and month:
 
@@ -130,10 +172,12 @@ bookmarks/
 - **Media** - Downloads images to local `assets/` folder
 - **Articles** - Extracts Twitter articles to `articles/` subfolder with proper formatting in quoted tweets and replies
 - **Link resolution** - Expands t.co URLs and fetches page titles
+- **YAML frontmatter** - Rich metadata including author, date, hashtags, and link metadata (GitHub stars, OG tags)
+- **Hashtag sanitization** - Wraps #hashtags in backticks to prevent Obsidian tag pollution
 - **Resume support** - Saves state on rate limit, resume by running again
 - **Incremental export** - Skips already-exported bookmarks
 - **Single tweet mode** - Process a single tweet by ID for testing or re-running errors
-- **Rebuild mode** - Iterate all bookmarks from beginning, optionally backfilling replies on existing bookmarks
+- **Rebuild mode** - Iterate all bookmarks from beginning, optionally backfilling replies or frontmatter on existing bookmarks
 
 ## Rate Limiting
 

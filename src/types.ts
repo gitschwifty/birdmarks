@@ -1,5 +1,41 @@
 import type { TweetData } from "@steipete/bird";
 
+// Link metadata for frontmatter
+export interface LinkMetadata {
+  url: string;
+  type: "github" | "youtube" | "article" | "unknown";
+  title?: string;
+  description?: string;
+  site?: string;
+  // GitHub-specific
+  owner?: string;
+  repo?: string;
+  stars?: number;
+  language?: string;
+  topics?: string[];
+}
+
+// YAML frontmatter structure for bookmark markdown files
+export interface BookmarkFrontmatter {
+  id: string;
+  author: string;
+  author_name: string;
+  date: string; // ISO date (yyyy-mm-dd)
+  url: string;
+  thread_length?: number;
+  reply_count?: number;
+  media_count?: number;
+  quoted_tweet?: string;
+  hashtags?: string[];
+  links?: LinkMetadata[];
+}
+
+// Resolved URL with optional pre-fetched OG metadata
+export interface ResolvedUrl {
+  url: string;
+  ogMetadata?: LinkMetadata;
+}
+
 // Extended tweet data with processed fields
 export interface ProcessedTweet extends TweetData {
   processedText: string; // Text with resolved links, unescaped
@@ -7,6 +43,7 @@ export interface ProcessedTweet extends TweetData {
   processedQuotedTweet?: ProcessedTweet; // Recursively processed quoted tweet
   linkedStatusIds: string[]; // Twitter status IDs found in links (for article expansion)
   linkedArticleIds: string[]; // Twitter article IDs found (x.com/i/article/...)
+  resolvedUrls: ResolvedUrl[]; // Resolved URLs for metadata extraction
 }
 
 export interface LocalMedia {
@@ -32,6 +69,10 @@ export interface ExporterState {
   // First-exported tracking
   previousFirstExported?: string; // From last completed run
   currentRunFirstExported?: string; // Set on first export of current run
+
+  // Completion tracking
+  allBookmarksProcessed?: boolean; // Set true when no more pages
+  lastFullScanAt?: string; // ISO timestamp of completion
 }
 
 // Error tracking
@@ -52,4 +93,5 @@ export interface ExporterConfig {
   useDateFolders?: boolean; // Organize bookmarks into yyyy-mm subfolders
   rebuildMode?: boolean; // Iterate all bookmarks from beginning, save cursor as you go
   backfillReplies?: boolean; // Backfill missing replies on existing bookmarks (use with -R)
+  backfillFrontmatter?: boolean; // Add/update frontmatter on existing bookmarks (use with -R)
 }

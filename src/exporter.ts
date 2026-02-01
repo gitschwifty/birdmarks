@@ -9,6 +9,7 @@ import {
   bookmarkExistsById,
   findBookmarkPath,
   bookmarkHasReplies,
+  bookmarkHasFrontmatter,
 } from "./state";
 import { expandThread } from "./thread";
 import { processTweet, writeBookmarkMarkdown, writeArticleFromTweet, generateRepliesSection } from "./markdown";
@@ -23,6 +24,7 @@ interface ExportResult {
   hitPreviousExport: boolean;
   rateLimited: boolean;
   backfilled?: number; // Number of bookmarks that had replies backfilled
+  frontmatterAdded?: number; // Number of bookmarks that had frontmatter added/updated
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -517,6 +519,9 @@ export async function exportBookmarks(
     console.log(`Resuming from page ${state.currentPage}...`);
   }
 
+  // Track if we completed a full scan (no more pages, not rate limited)
+  let completedFullScan = false;
+
   while (true) {
     pageNum++;
     pagesFetchedThisRun++;
@@ -569,6 +574,7 @@ export async function exportBookmarks(
             continue;
           }
           console.log("No more bookmarks to process (empty page, no cursor).");
+          completedFullScan = true;
           break;
         }
 
@@ -712,6 +718,7 @@ export async function exportBookmarks(
         return result;
       } else {
         console.log(`Reached max pages limit (${config.maxPages}), but no more pages available anyway.`);
+        completedFullScan = true;
       }
       break;
     }
@@ -725,14 +732,15 @@ export async function exportBookmarks(
       console.log(`Waiting ${PAGE_DELAY_MS / 1000}s before next page...`);
       await sleep(PAGE_DELAY_MS);
     } else {
-      // No more pages
+      // No more pages - full scan completed
       console.log("No more pages available.");
+      completedFullScan = true;
       break;
     }
   }
 
   // Finish run - update first exported tracking
-  await finishRun(config.outputDir);
+  await finishRun(config.outputDir, { completedFullScan });
 
   return result;
 }
@@ -769,7 +777,7 @@ async function backfillRepliesForBookmark(
   return true;
 }
 
-// Rebuild mode: iterate all bookmarks from beginning, skip existing, optionally backfill replies
+// Rebuild mode: iterate all bookmarks from beginning, skip existing, optionally backfill replies/frontmatter
 export async function exportBookmarksRebuild(
   client: TwitterClient,
   config: ExporterConfig
@@ -781,6 +789,7 @@ export async function exportBookmarksRebuild(
     hitPreviousExport: false,
     rateLimited: false,
     backfilled: 0,
+    frontmatterAdded: 0,
   };
 
   // Ensure output directory exists
@@ -793,6 +802,9 @@ export async function exportBookmarksRebuild(
   console.log("Starting rebuild mode...");
   if (config.backfillReplies) {
     console.log("Backfill replies: enabled");
+  }
+  if (config.backfillFrontmatter) {
+    console.log("Backfill frontmatter: enabled");
   }
 
   // Start from beginning or resume from saved cursor
@@ -809,6 +821,9 @@ export async function exportBookmarksRebuild(
     state.currentPageBookmarks = undefined;
     state.currentPage = undefined;
   }
+
+  // Track if we completed a full scan (no more pages, not rate limited)
+  let completedFullScan = false;
 
   while (true) {
     pageNum++;
@@ -840,6 +855,7 @@ export async function exportBookmarksRebuild(
           continue;
         }
         console.log("No more bookmarks to process (empty page, no cursor).");
+        completedFullScan = true;
         break;
       }
 
@@ -859,7 +875,46 @@ export async function exportBookmarksRebuild(
         );
 
         if (existingPath) {
-          // Bookmark exists - check for backfill
+          // Bookmark exists - check for backfill options
+          let didBackfill = false;
+
+          // Frontmatter backfill
+          if (config.backfillFrontmatter) {
+            const hasFrontmatter = await bookmarkHasFrontmatter(existingPath);
+            if (!hasFrontmatter) {
+              console.log(`Adding frontmatter to ${tweet.id}...`);
+              try {
+                // Process tweet to get resolved URLs for metadata
+                const processed = await processBookmark(client, tweet, {
+                  ...config,
+                  includeReplies: false, // Don't fetch replies just for frontmatter
+                });
+                await writeBookmarkMarkdown(processed, config.outputDir, {
+                  useDateFolders: config.useDateFolders,
+                  mergeExistingFrontmatter: true,
+                  frontmatterOnly: true,
+                });
+                console.log(`  Added frontmatter to ${tweet.id}`);
+                result.frontmatterAdded = (result.frontmatterAdded ?? 0) + 1;
+                didBackfill = true;
+              } catch (error) {
+                if (error instanceof RateLimitError) throw error;
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                console.error(`  Error adding frontmatter to ${tweet.id}: ${errorMessage}`);
+                await appendError(config.outputDir, {
+                  tweetId: tweet.id,
+                  error: errorMessage,
+                  timestamp: new Date().toISOString(),
+                  context: `Adding frontmatter for @${tweet.author.username}`,
+                });
+                result.errors++;
+              }
+            } else {
+              console.log(`Skipping ${tweet.id} (already has frontmatter)`);
+            }
+          }
+
+          // Replies backfill
           if (config.backfillReplies && config.includeReplies) {
             const hasReplies = await bookmarkHasReplies(existingPath);
             if (!hasReplies) {
@@ -873,7 +928,8 @@ export async function exportBookmarksRebuild(
                 );
                 if (backfilled) {
                   console.log(`  Backfilled replies for ${tweet.id}`);
-                  result.backfilled!++;
+                  result.backfilled = (result.backfilled ?? 0) + 1;
+                  didBackfill = true;
                 } else {
                   console.log(`  No replies found for ${tweet.id}`);
                 }
@@ -889,10 +945,12 @@ export async function exportBookmarksRebuild(
                 });
                 result.errors++;
               }
-            } else {
+            } else if (!config.backfillFrontmatter) {
               console.log(`Skipping ${tweet.id} (already has replies)`);
             }
-          } else {
+          }
+
+          if (!didBackfill && !config.backfillReplies && !config.backfillFrontmatter) {
             console.log(`Skipping existing: ${tweet.id}`);
           }
           result.skipped++;
@@ -906,7 +964,9 @@ export async function exportBookmarksRebuild(
 
         try {
           const processed = await processBookmark(client, tweet, config);
-          const filename = await writeBookmarkMarkdown(processed, config.outputDir, config.useDateFolders);
+          const filename = await writeBookmarkMarkdown(processed, config.outputDir, {
+            useDateFolders: config.useDateFolders,
+          });
           console.log(`  Exported: ${filename}`);
           result.exported++;
 
@@ -947,8 +1007,12 @@ export async function exportBookmarksRebuild(
       await saveState(config.outputDir, state);
 
       // Log page summary
+      const backfillStats = [
+        result.backfilled ? `${result.backfilled} replies` : null,
+        result.frontmatterAdded ? `${result.frontmatterAdded} frontmatter` : null,
+      ].filter(Boolean).join(", ");
       console.log(
-        `\n--- Page ${pageNum} complete | Total: ${result.exported} exported, ${result.skipped} skipped, ${result.backfilled} backfilled, ${result.errors} errors ---\n`
+        `\n--- Page ${pageNum} complete | Total: ${result.exported} exported, ${result.skipped} skipped${backfillStats ? `, backfilled: ${backfillStats}` : ""}, ${result.errors} errors ---\n`
       );
 
       // Check max pages limit
@@ -958,6 +1022,7 @@ export async function exportBookmarksRebuild(
           return result;
         } else {
           console.log(`Reached max pages limit (${config.maxPages}), but no more pages available anyway.`);
+          completedFullScan = true;
         }
         break;
       }
@@ -965,6 +1030,7 @@ export async function exportBookmarksRebuild(
       // Move to next page
       if (!nextCursor) {
         console.log("No more pages available.");
+        completedFullScan = true;
         break;
       }
 
@@ -983,7 +1049,7 @@ export async function exportBookmarksRebuild(
   }
 
   // Clear state on successful completion
-  await finishRun(config.outputDir);
+  await finishRun(config.outputDir, { completedFullScan });
 
   return result;
 }

@@ -34,7 +34,11 @@ export async function clearPaginationState(outputDir: string): Promise<void> {
   await saveState(outputDir, state);
 }
 
-export async function finishRun(outputDir: string): Promise<void> {
+export interface FinishRunOptions {
+  completedFullScan?: boolean; // True when all bookmarks were processed (no more pages)
+}
+
+export async function finishRun(outputDir: string, options?: FinishRunOptions): Promise<void> {
   const state = await loadState(outputDir);
 
   // Current run's first becomes previous for next run
@@ -47,6 +51,12 @@ export async function finishRun(outputDir: string): Promise<void> {
   delete state.nextCursor;
   delete state.currentPageBookmarks;
   delete state.currentPage;
+
+  // Mark completion if this was a full scan
+  if (options?.completedFullScan) {
+    state.allBookmarksProcessed = true;
+    state.lastFullScanAt = new Date().toISOString();
+  }
 
   await saveState(outputDir, state);
 }
@@ -216,4 +226,24 @@ export async function bookmarkHasReplies(filepath: string): Promise<boolean> {
   }
   const content = await file.text();
   return content.includes("## Replies");
+}
+
+// Check if a bookmark file already has birdmarks-generated YAML frontmatter
+// We check for the `id:` field which birdmarks always includes
+export async function bookmarkHasFrontmatter(filepath: string): Promise<boolean> {
+  const file = Bun.file(filepath);
+  if (!(await file.exists())) {
+    return false;
+  }
+  const content = await file.text();
+  if (!content.startsWith("---")) {
+    return false;
+  }
+  // Find the closing --- and check if id: exists in the frontmatter
+  const endIndex = content.indexOf("\n---", 3);
+  if (endIndex === -1) {
+    return false;
+  }
+  const frontmatter = content.slice(0, endIndex);
+  return frontmatter.includes("\nid:");
 }
