@@ -66,6 +66,9 @@ export interface ExporterState {
   currentPageBookmarks?: TweetData[];
   currentPage?: number;
 
+  // New bookmarks phase (-N mode) pagination
+  newPhaseCursor?: string; // Cursor for resuming -N mode after rate limit
+
   // First-exported tracking
   previousFirstExported?: string; // From last completed run
   currentRunFirstExported?: string; // Set on first export of current run
