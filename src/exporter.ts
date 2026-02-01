@@ -606,10 +606,11 @@ export async function exportBookmarks(
     }
     if (checkCount > 0 && alreadyExistCount === checkCount) {
       console.log(
-        `First ${checkCount} bookmarks already exported, stopping. (Run with fresh state to re-export.)`
+        `First ${checkCount} bookmarks already exported, stopping. (Cursor preserved for -R mode.)`
       );
       result.hitPreviousExport = true;
-      break;
+      // Return early without calling finishRun() - preserves cursor for -R mode
+      return result;
     }
 
     // Process each bookmark
