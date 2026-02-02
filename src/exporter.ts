@@ -368,10 +368,10 @@ export async function exportBookmarks(
     }
 
     let newPageNum = 0;
-    let newCursor: string | undefined = state.newPhaseCursor; // Resume from saved cursor if exists
+    let currentPageCursor: string | undefined = state.newPhaseCursor; // Cursor used for current page
     let newPhaseFirstExported: string | undefined;
 
-    if (newCursor) {
+    if (currentPageCursor) {
       console.log("Resuming new bookmarks phase from saved cursor...");
     }
 
@@ -381,8 +381,8 @@ export async function exportBookmarks(
 
       // Check max pages limit
       if (config.maxPages && pagesFetchedThisRun >= config.maxPages) {
-        // Save new phase cursor for resume
-        state.newPhaseCursor = newCursor;
+        // Save current page cursor for resume (to re-fetch this page)
+        state.newPhaseCursor = currentPageCursor;
         await saveState(config.outputDir, state);
         console.log(`Reached max pages limit (${config.maxPages}) during new bookmarks phase.`);
         console.log("New phase cursor saved. Run -N again to continue.");
@@ -391,9 +391,12 @@ export async function exportBookmarks(
 
       console.log(`Fetching new bookmarks page ${newPageNum}...`);
 
+      let nextCursor: string | undefined;
+      let bookmarksPage: TweetData[];
+
       try {
         const bookmarksResult = await withRateLimitCheck(
-          () => client.getAllBookmarks({ maxPages: 1, cursor: newCursor }),
+          () => client.getAllBookmarks({ maxPages: 1, cursor: currentPageCursor }),
           "fetching new bookmarks"
         );
 
@@ -401,15 +404,15 @@ export async function exportBookmarks(
           throw new Error(bookmarksResult.error || "Failed to fetch bookmarks");
         }
 
-        const bookmarksPage = bookmarksResult.tweets;
-        newCursor = bookmarksResult.nextCursor;
+        bookmarksPage = bookmarksResult.tweets;
+        nextCursor = bookmarksResult.nextCursor;
 
         if (bookmarksPage.length === 0) {
           console.log("No new bookmarks found.");
           break;
         }
 
-        console.log(`Got ${bookmarksPage.length} bookmarks${newCursor ? ", more available" : ""}`);
+        console.log(`Got ${bookmarksPage.length} bookmarks${nextCursor ? ", more available" : ""}`);
 
         // Process bookmarks until we hit the stopping point
         for (let i = 0; i < bookmarksPage.length; i++) {
@@ -457,8 +460,8 @@ export async function exportBookmarks(
             }
           } catch (error: unknown) {
             if (error instanceof RateLimitError) {
-              // Save new phase cursor for resume
-              state.newPhaseCursor = newCursor;
+              // Save current page cursor for resume (to re-fetch this page)
+              state.newPhaseCursor = currentPageCursor;
               await saveState(config.outputDir, state);
               console.error(`\n${error.message}. New phase cursor saved. Resume -N to continue.`);
               result.rateLimited = true;
@@ -476,20 +479,21 @@ export async function exportBookmarks(
           }
         }
 
-        if (!newCursor) {
+        if (!nextCursor) {
           console.log("No more new bookmarks pages.");
           break;
         }
 
-        // Save cursor after each page (for resume on rate limit)
-        state.newPhaseCursor = newCursor;
+        // Advance to next page and save cursor (so next run starts at page N+1)
+        currentPageCursor = nextCursor;
+        state.newPhaseCursor = currentPageCursor;
         await saveState(config.outputDir, state);
 
         await sleep(PAGE_DELAY_MS);
       } catch (error) {
         if (error instanceof RateLimitError) {
-          // Save new phase cursor for resume
-          state.newPhaseCursor = newCursor;
+          // Save current page cursor for resume (to re-fetch this page)
+          state.newPhaseCursor = currentPageCursor;
           await saveState(config.outputDir, state);
           console.error(`\n${error.message}. New phase cursor saved. Resume -N to continue.`);
           result.rateLimited = true;
