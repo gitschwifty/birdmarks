@@ -19,6 +19,7 @@ async function main() {
   let rebuildMode = false;
   let backfillReplies = false;
   let backfillFrontmatter = false;
+  let verifyUser: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -54,6 +55,9 @@ async function main() {
       backfillReplies = true;
     } else if (arg === "-F" || arg === "--backfill-frontmatter") {
       backfillFrontmatter = true;
+    } else if (arg === "--verify-user") {
+      const val = args[++i];
+      if (val) verifyUser = val.replace(/^@/, "");
     } else if (arg === "-h" || arg === "--help") {
       printHelp();
       process.exit(0);
@@ -120,6 +124,21 @@ async function main() {
     process.exit(1);
   }
   console.log(`Logged in as: @${me.user.username} (${me.user.name})`);
+
+  if (verifyUser && me.user.username.toLowerCase() !== verifyUser.toLowerCase()) {
+    console.error("");
+    console.error("╔══════════════════════════════════════════════════════════╗");
+    console.error("║  ⚠️  USER MISMATCH - WRONG ACCOUNT                      ║");
+    console.error("╠══════════════════════════════════════════════════════════╣");
+    console.error(`║  Expected: @${verifyUser}`);
+    console.error(`║  Actual:   @${me.user.username}`);
+    console.error("║                                                          ║");
+    console.error("║  Check your browser login or --cookie-source setting.    ║");
+    console.error("╚══════════════════════════════════════════════════════════╝");
+    console.error("");
+    process.exit(1);
+  }
+
   console.log("");
 
   // Run export
@@ -214,6 +233,7 @@ Options:
   -F, --backfill-frontmatter Add frontmatter to existing bookmarks (use with -R)
   --quote-depth <n>    Maximum depth for quoted tweets (default: 3, -1 for unlimited)
   --cookie-source <s>  Browser to get cookies from: safari, chrome, firefox
+  --verify-user <h>    Exit with error if logged-in user doesn't match handle
   -h, --help           Show this help message
 
 Examples:
