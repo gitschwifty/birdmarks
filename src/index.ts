@@ -15,6 +15,7 @@ async function main() {
   let includeReplies = false;
   let maxPages: number | undefined;
   let fetchNewFirst = false;
+  let onlyNew = false;
   let useDateFolders = false;
   let rebuildMode = false;
   let backfillReplies = false;
@@ -47,6 +48,8 @@ async function main() {
       if (val) maxPages = parseInt(val, 10);
     } else if (arg === "-N" || arg === "--new-first") {
       fetchNewFirst = true;
+    } else if (arg === "--only-new") {
+      onlyNew = true;
     } else if (arg === "-d" || arg === "--date-folders") {
       useDateFolders = true;
     } else if (arg === "-R" || arg === "--rebuild") {
@@ -80,6 +83,7 @@ async function main() {
   console.log(`Include replies: ${includeReplies}`);
   if (maxPages) console.log(`Max pages this run: ${maxPages}`);
   if (fetchNewFirst) console.log(`Fetch new first: enabled`);
+  if (onlyNew) console.log(`Only new: enabled (skip old cursor)`);
   if (useDateFolders) console.log(`Date folders: enabled (yyyy/mm/)`);
   if (rebuildMode) console.log(`Rebuild mode: enabled`);
   if (backfillReplies) console.log(`Backfill replies: enabled`);
@@ -148,6 +152,7 @@ async function main() {
     includeReplies,
     maxPages,
     fetchNewFirst,
+    onlyNew,
     useDateFolders,
     rebuildMode,
     backfillReplies,
@@ -226,6 +231,7 @@ Options:
   -o, --output <dir>   Output directory (alternative to positional arg)
   -n, --max-pages <n>  Limit pages fetched this run (to avoid rate limits)
   -N, --new-first      Fetch new bookmarks first before resuming from cursor
+  --only-new           Only fetch new bookmarks (most recent to anchor), skip old cursor
   -d, --date-folders   Organize bookmarks into yyyy-mm subfolders
   -r, --replies        Include replies from other users (default: off)
   -R, --rebuild        Iterate all bookmarks from beginning (saves cursor for resume)

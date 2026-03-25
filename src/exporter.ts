@@ -354,152 +354,189 @@ export async function exportBookmarks(
   let pagesFetchedThisRun = 0;
 
   // === NEW BOOKMARKS PHASE ===
-  // If fetchNewFirst is enabled and we have resume state, fetch new bookmarks from the top first
-  if (config.fetchNewFirst && hasResumeState) {
-    console.log("\n=== Fetching new bookmarks first ===\n");
-
+  // Runs when: -N with resume state, or --only-new (always)
+  if ((config.fetchNewFirst && hasResumeState) || config.onlyNew) {
     // The stopping point is the first tweet we exported when this run started
     // Fall back to previousFirstExported if currentRunFirstExported isn't set (old state)
-    const newPhaseStopAt = state.currentRunFirstExported ?? state.previousFirstExported;
-    if (newPhaseStopAt) {
-      console.log(`Will stop when reaching: ${newPhaseStopAt}`);
-    } else {
-      console.log(`Warning: No stopping point found in state, will process until no new bookmarks`);
-    }
+    const originalStopAt = state.currentRunFirstExported ?? state.previousFirstExported;
 
-    let newPageNum = 0;
-    let currentPageCursor: string | undefined = state.newPhaseCursor; // Cursor used for current page
+    // --only-new with a saved newPhaseCursor: two passes
+    //   Pass 1: resume from cursor → original anchor (finish interrupted work)
+    //   Pass 2: fresh from top → pass 1's first-seen (catch bookmarks added since rate limit)
+    // Otherwise: single pass from top (or cursor) → anchor
+    // On rate limit recovery of pass 2, currentRunFirstExported holds pass 1's first-seen,
+    // so it becomes the stop point via originalStopAt.
+    const hadNewPhaseCursor = !!state.newPhaseCursor;
+    const totalPasses = (config.onlyNew && hadNewPhaseCursor) ? 2 : 1;
     let newPhaseFirstExported: string | undefined;
+    let pass1FirstSeen: string | undefined;
 
-    if (currentPageCursor) {
-      console.log("Resuming new bookmarks phase from saved cursor...");
-    }
+    for (let pass = 1; pass <= totalPasses; pass++) {
+      // Determine stop point for this pass
+      let passStopAt: string | undefined;
 
-    newBookmarksLoop: while (true) {
-      newPageNum++;
-      pagesFetchedThisRun++;
-
-      // Check max pages limit
-      if (config.maxPages && pagesFetchedThisRun >= config.maxPages) {
-        // Save current page cursor for resume (to re-fetch this page)
-        state.newPhaseCursor = currentPageCursor;
-        await saveState(config.outputDir, state);
-        console.log(`Reached max pages limit (${config.maxPages}) during new bookmarks phase.`);
-        console.log("New phase cursor saved. Run -N again to continue.");
-        return result;
+      if (pass === 1 && hadNewPhaseCursor) {
+        console.log("\n=== Resuming new bookmarks phase from saved cursor ===\n");
+        passStopAt = originalStopAt;
+      } else if (pass === 2) {
+        console.log("\n=== Catching up on bookmarks added since last run ===\n");
+        // Pass 2 stops at pass 1's first-seen (no need to re-scan those pages)
+        passStopAt = pass1FirstSeen;
+        // Reset — pass 2's first-seen becomes the new anchor (newest bookmark overall)
+        newPhaseFirstExported = undefined;
+      } else {
+        console.log("\n=== Fetching new bookmarks first ===\n");
+        passStopAt = originalStopAt;
       }
 
-      console.log(`Fetching new bookmarks page ${newPageNum}...`);
+      if (passStopAt) {
+        console.log(`Will stop when reaching: ${passStopAt}`);
+      } else {
+        console.log(`Warning: No stopping point found in state, will process until no new bookmarks`);
+      }
 
-      let nextCursor: string | undefined;
-      let bookmarksPage: TweetData[];
+      let newPageNum = 0;
+      // Pass 1 resumes from cursor; pass 2 (and single-pass mode) starts fresh from top
+      let currentPageCursor: string | undefined = (pass === 1) ? state.newPhaseCursor : undefined;
 
-      try {
-        const bookmarksResult = await withRateLimitCheck(
-          () => client.getAllBookmarks({ maxPages: 1, cursor: currentPageCursor }),
-          "fetching new bookmarks"
-        );
+      newBookmarksLoop: while (true) {
+        newPageNum++;
+        pagesFetchedThisRun++;
 
-        if (!bookmarksResult.success) {
-          throw new Error(bookmarksResult.error || "Failed to fetch bookmarks");
-        }
-
-        bookmarksPage = bookmarksResult.tweets;
-        nextCursor = bookmarksResult.nextCursor;
-
-        if (bookmarksPage.length === 0) {
-          console.log("No new bookmarks found.");
-          break;
-        }
-
-        console.log(`Got ${bookmarksPage.length} bookmarks${nextCursor ? ", more available" : ""}`);
-
-        // Process bookmarks until we hit the stopping point
-        for (let i = 0; i < bookmarksPage.length; i++) {
-          const tweet = bookmarksPage[i];
-          if (!tweet) continue;
-
-          // Check if we've hit the stopping point (first exported from this run)
-          if (newPhaseStopAt && tweet.id === newPhaseStopAt) {
-            console.log(`Hit stopping point ${tweet.id}, new bookmarks phase complete.`);
-            break newBookmarksLoop;
-          }
-
-          // Track first seen in new phase (for next run's stopping point)
-          if (!newPhaseFirstExported) {
-            newPhaseFirstExported = tweet.id;
-          }
-
-          // Check if already exported
-          const alreadyExists = await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt, config.useDateFolders);
-          if (alreadyExists) {
-            console.log(`Skipping existing bookmark ${tweet.id}`);
-            result.skipped++;
-            continue; // Skip but keep going - don't break!
-          }
-
-          console.log(
-            `Processing new bookmark ${i + 1}/${bookmarksPage.length}: @${tweet.author.username} - ${tweet.text.slice(0, 50)}...`
-          );
-
-          try {
-            // Use processBookmark which handles article re-fetching
-            const processed = await processBookmark(client, tweet, config);
-
-            const filename = await writeBookmarkMarkdown(processed, config.outputDir, config.useDateFolders);
-            console.log(`  Exported (new): ${filename}`);
-            result.exported++;
-
-            // Fetch any linked articles
-            const { statusIds, tweetsWithArticleLinks } = collectLinkedIds(processed);
-            if (statusIds.length > 0) {
-              await fetchLinkedArticles(client, statusIds, config);
-            }
-            if (tweetsWithArticleLinks.length > 0) {
-              await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config);
-            }
-          } catch (error: unknown) {
-            if (error instanceof RateLimitError) {
-              // Save current page cursor for resume (to re-fetch this page)
-              state.newPhaseCursor = currentPageCursor;
-              await saveState(config.outputDir, state);
-              console.error(`\n${error.message}. New phase cursor saved. Resume -N to continue.`);
-              result.rateLimited = true;
-              return result;
-            }
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`  Error processing ${tweet.id}: ${errorMessage}`);
-            await appendError(config.outputDir, {
-              tweetId: tweet.id,
-              error: errorMessage,
-              timestamp: new Date().toISOString(),
-              context: `Processing new bookmark from @${tweet.author.username}`,
-            });
-            result.errors++;
-          }
-        }
-
-        if (!nextCursor) {
-          console.log("No more new bookmarks pages.");
-          break;
-        }
-
-        // Advance to next page and save cursor (so next run starts at page N+1)
-        currentPageCursor = nextCursor;
-        state.newPhaseCursor = currentPageCursor;
-        await saveState(config.outputDir, state);
-
-        await sleep(PAGE_DELAY_MS);
-      } catch (error) {
-        if (error instanceof RateLimitError) {
+        // Check max pages limit
+        if (config.maxPages && pagesFetchedThisRun >= config.maxPages) {
           // Save current page cursor for resume (to re-fetch this page)
           state.newPhaseCursor = currentPageCursor;
           await saveState(config.outputDir, state);
-          console.error(`\n${error.message}. New phase cursor saved. Resume -N to continue.`);
-          result.rateLimited = true;
+          console.log(`Reached max pages limit (${config.maxPages}) during new bookmarks phase.`);
+          console.log("New phase cursor saved. Run again to continue.");
           return result;
         }
-        throw error;
+
+        console.log(`Fetching new bookmarks page ${newPageNum}...`);
+
+        let nextCursor: string | undefined;
+        let bookmarksPage: TweetData[];
+
+        try {
+          const bookmarksResult = await withRateLimitCheck(
+            () => client.getAllBookmarks({ maxPages: 1, cursor: currentPageCursor }),
+            "fetching new bookmarks"
+          );
+
+          if (!bookmarksResult.success) {
+            throw new Error(bookmarksResult.error || "Failed to fetch bookmarks");
+          }
+
+          bookmarksPage = bookmarksResult.tweets;
+          nextCursor = bookmarksResult.nextCursor;
+
+          if (bookmarksPage.length === 0) {
+            console.log("No new bookmarks found.");
+            break;
+          }
+
+          console.log(`Got ${bookmarksPage.length} bookmarks${nextCursor ? ", more available" : ""}`);
+
+          // Process bookmarks until we hit the stopping point
+          for (let i = 0; i < bookmarksPage.length; i++) {
+            const tweet = bookmarksPage[i];
+            if (!tweet) continue;
+
+            // Check if we've hit the stopping point
+            if (passStopAt && tweet.id === passStopAt) {
+              console.log(`Hit stopping point ${tweet.id}, new bookmarks phase complete.`);
+              break newBookmarksLoop;
+            }
+
+            // Track first seen in new phase (for next run's stopping point)
+            if (!newPhaseFirstExported) {
+              newPhaseFirstExported = tweet.id;
+            }
+
+            // Check if already exported
+            const alreadyExists = await bookmarkExistsById(config.outputDir, tweet.id, tweet.createdAt, config.useDateFolders);
+            if (alreadyExists) {
+              console.log(`Skipping existing bookmark ${tweet.id}`);
+              result.skipped++;
+              continue; // Skip but keep going - don't break!
+            }
+
+            console.log(
+              `Processing new bookmark ${i + 1}/${bookmarksPage.length}: @${tweet.author.username} - ${tweet.text.slice(0, 50)}...`
+            );
+
+            try {
+              // Use processBookmark which handles article re-fetching
+              const processed = await processBookmark(client, tweet, config);
+
+              const filename = await writeBookmarkMarkdown(processed, config.outputDir, config.useDateFolders);
+              console.log(`  Exported (new): ${filename}`);
+              result.exported++;
+
+              // Fetch any linked articles
+              const { statusIds, tweetsWithArticleLinks } = collectLinkedIds(processed);
+              if (statusIds.length > 0) {
+                await fetchLinkedArticles(client, statusIds, config);
+              }
+              if (tweetsWithArticleLinks.length > 0) {
+                await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config);
+              }
+            } catch (error: unknown) {
+              if (error instanceof RateLimitError) {
+                // Save current page cursor for resume (to re-fetch this page)
+                state.newPhaseCursor = currentPageCursor;
+                await saveState(config.outputDir, state);
+                console.error(`\n${error.message}. New phase cursor saved. Resume to continue.`);
+                result.rateLimited = true;
+                return result;
+              }
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              console.error(`  Error processing ${tweet.id}: ${errorMessage}`);
+              await appendError(config.outputDir, {
+                tweetId: tweet.id,
+                error: errorMessage,
+                timestamp: new Date().toISOString(),
+                context: `Processing new bookmark from @${tweet.author.username}`,
+              });
+              result.errors++;
+            }
+          }
+
+          if (!nextCursor) {
+            console.log("No more new bookmarks pages.");
+            break;
+          }
+
+          // Advance to next page and save cursor (so next run starts at page N+1)
+          currentPageCursor = nextCursor;
+          state.newPhaseCursor = currentPageCursor;
+          await saveState(config.outputDir, state);
+
+          await sleep(PAGE_DELAY_MS);
+        } catch (error) {
+          if (error instanceof RateLimitError) {
+            // Save current page cursor for resume (to re-fetch this page)
+            state.newPhaseCursor = currentPageCursor;
+            await saveState(config.outputDir, state);
+            console.error(`\n${error.message}. New phase cursor saved. Resume to continue.`);
+            result.rateLimited = true;
+            return result;
+          }
+          throw error;
+        }
+      }
+
+      // After pass 1 in two-pass mode: persist pass 1's first-seen as the stop point
+      // for pass 2 (and for rate limit recovery during pass 2, since on next run
+      // currentRunFirstExported becomes originalStopAt)
+      if (pass === 1 && totalPasses === 2) {
+        pass1FirstSeen = newPhaseFirstExported;
+        if (pass1FirstSeen) {
+          state.currentRunFirstExported = pass1FirstSeen;
+        }
+        state.newPhaseCursor = undefined;
+        await saveState(config.outputDir, state);
       }
     }
 
@@ -517,6 +554,13 @@ export async function exportBookmarks(
     }
 
     console.log(`\n=== New bookmarks phase complete (${result.exported} exported, ${result.skipped} skipped) ===`);
+
+    if (config.onlyNew) {
+      // --only-new: finish run and return, don't continue from old cursor
+      await finishRun(config.outputDir);
+      return result;
+    }
+
     console.log("=== Continuing from saved cursor ===\n");
   }
 

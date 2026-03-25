@@ -93,6 +93,7 @@ export interface ExporterConfig {
   includeReplies: boolean;
   maxPages?: number; // Limit pages per run (undefined = unlimited)
   fetchNewFirst?: boolean; // Fetch new bookmarks before resuming from cursor
+  onlyNew?: boolean; // Only fetch new bookmarks (most recent to anchor), skip old cursor
   useDateFolders?: boolean; // Organize bookmarks into yyyy-mm subfolders
   rebuildMode?: boolean; // Iterate all bookmarks from beginning, save cursor as you go
   backfillReplies?: boolean; // Backfill missing replies on existing bookmarks (use with -R)
