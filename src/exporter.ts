@@ -657,7 +657,7 @@ export async function exportBookmarks(
       }
     }
 
-    // Check if first 3 tweets already exist (more robust than single previousFirstExported)
+    // Check if first 3 and last tweet already exist (ensures whole page is exported)
     const checkCount = Math.min(3, bookmarksPage.length);
     let alreadyExistCount = 0;
     for (let i = 0; i < checkCount; i++) {
@@ -666,12 +666,19 @@ export async function exportBookmarks(
         alreadyExistCount++;
       }
     }
-    if (checkCount > 0 && alreadyExistCount === checkCount) {
+    const lastTweet = bookmarksPage[bookmarksPage.length - 1];
+    const lastExists = lastTweet && (await bookmarkExistsById(config.outputDir, lastTweet.id, lastTweet.createdAt, config.useDateFolders));
+    if (checkCount > 0 && alreadyExistCount === checkCount && lastExists) {
+      // Advance cursor so next run picks up from the next page
+      if (nextCursor) {
+        state.nextCursor = nextCursor;
+        state.currentPage = pageNum;
+        await saveState(config.outputDir, state);
+      }
       console.log(
-        `First ${checkCount} bookmarks already exported, stopping. (Cursor preserved for -R mode.)`
+        `First ${checkCount} bookmarks already exported, stopping.`
       );
       result.hitPreviousExport = true;
-      // Return early without calling finishRun() - preserves cursor for -R mode
       return result;
     }
 
