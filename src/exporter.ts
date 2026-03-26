@@ -556,8 +556,16 @@ export async function exportBookmarks(
     console.log(`\n=== New bookmarks phase complete (${result.exported} exported, ${result.skipped} skipped) ===`);
 
     if (config.onlyNew) {
-      // --only-new: finish run and return, don't continue from old cursor
-      await finishRun(config.outputDir);
+      // --only-new: rotate the anchor but preserve old pagination cursor
+      // (finishRun would delete nextCursor/currentPage, losing backfill progress)
+      if (newPhaseFirstExported) {
+        const st = await loadState(config.outputDir);
+        if (st.currentRunFirstExported) {
+          st.previousFirstExported = st.currentRunFirstExported;
+          delete st.currentRunFirstExported;
+        }
+        await saveState(config.outputDir, st);
+      }
       return result;
     }
 
