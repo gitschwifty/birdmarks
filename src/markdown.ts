@@ -135,7 +135,7 @@ function generateFrontmatterFromObject(obj: Record<string, unknown>): string {
 
   // Maintain a specific order for readability
   const orderedKeys = [
-    "id", "author", "author_name", "date", "url",
+    "id", "author", "author_name", "date", "url", "folder",
     "thread_length", "reply_count", "media_count", "quoted_tweet",
     "hashtags", "links"
   ];
@@ -198,8 +198,9 @@ function writeYamlKey(lines: string[], key: string, value: unknown): void {
       }
     }
   } else if (typeof value === "string") {
-    // Check if needs quoting
-    if (key === "id" || key === "quoted_tweet" || key === "author_name" ||
+    // Check if needs quoting. Folder names are user-supplied and can contain
+    // non-ASCII / spaces / punctuation, so always quote them.
+    if (key === "id" || key === "quoted_tweet" || key === "author_name" || key === "folder" ||
         value.includes('"') || value.includes(":") || value.includes("\n")) {
       lines.push(`${key}: "${escapeYamlString(String(value))}"`);
     } else {
@@ -213,7 +214,8 @@ function writeYamlKey(lines: string[], key: string, value: unknown): void {
 // Generate YAML frontmatter for a bookmark
 export function generateFrontmatter(
   bookmark: ProcessedBookmark,
-  linkMetadata: LinkMetadata[]
+  linkMetadata: LinkMetadata[],
+  folder?: string
 ): string {
   const tweet = bookmark.originalTweet;
   const lines: string[] = ["---"];
@@ -232,6 +234,11 @@ export function generateFrontmatter(
 
   // URL to tweet
   lines.push(`url: https://twitter.com/${tweet.author.username}/status/${tweet.id}`);
+
+  // X bookmark folder (only present when --with-folders or --backfill-folders is active)
+  if (folder !== undefined) {
+    lines.push(`folder: "${escapeYamlString(folder)}"`);
+  }
 
   // Thread length (original + thread tweets)
   const threadLength = 1 + bookmark.threadTweets.length;
@@ -552,10 +559,22 @@ export function generateMarkdown(bookmark: ProcessedBookmark): string {
 }
 
 // Generate markdown for an article and return the filename
-async function generateArticleMarkdown(tweet: TweetData): Promise<{ filename: string; content: string } | null> {
+async function generateArticleMarkdown(
+  tweet: TweetData,
+  folder?: string
+): Promise<{ filename: string; content: string } | null> {
   if (!tweet.article) return null;
 
   const lines: string[] = [];
+
+  // Frontmatter — only emitted when a folder is supplied. Keeps article
+  // files clean when --with-folders isn't used.
+  if (folder !== undefined) {
+    lines.push("---");
+    lines.push(`folder: "${escapeYamlString(folder)}"`);
+    lines.push("---");
+    lines.push("");
+  }
 
   // Title
   const title = tweet.article.title || "Untitled Article";
@@ -590,13 +609,14 @@ async function generateArticleMarkdown(tweet: TweetData): Promise<{ filename: st
 // Recursively extract articles from a tweet and its quoted tweets
 async function extractArticlesFromTweet(
   tweet: ProcessedTweet | TweetData,
-  outputDir: string
+  outputDir: string,
+  folder?: string
 ): Promise<void> {
   // Write article if this tweet has one AND has real content (not just a link)
   // Bookmarks API returns article metadata but text is just t.co link - skip those
   // They'll be handled by fetchArticlesFromTweetsWithArticleLinks
   if (tweet.article && tweet.text.length > 300) {
-    const articleResult = await generateArticleMarkdown(tweet);
+    const articleResult = await generateArticleMarkdown(tweet, folder);
     if (articleResult) {
       await ensureArticlesDir(outputDir);
       const articlePath = join(outputDir, ARTICLES_DIR, articleResult.filename);
@@ -617,7 +637,7 @@ async function extractArticlesFromTweet(
     : tweet.quotedTweet;
 
   if (quotedTweet) {
-    await extractArticlesFromTweet(quotedTweet, outputDir);
+    await extractArticlesFromTweet(quotedTweet, outputDir, folder);
   }
 }
 
@@ -625,6 +645,7 @@ export interface WriteBookmarkOptions {
   useDateFolders?: boolean;
   mergeExistingFrontmatter?: boolean; // When true, preserve existing frontmatter fields
   frontmatterOnly?: boolean; // When true, only update frontmatter, keep existing body
+  folder?: string; // X bookmark folder name to record in frontmatter
 }
 
 export async function writeBookmarkMarkdown(
@@ -709,11 +730,18 @@ export async function writeBookmarkMarkdown(
   }
 
   // Generate frontmatter
-  let frontmatter = generateFrontmatter(bookmark, linkMetadata);
+  let frontmatter = generateFrontmatter(bookmark, linkMetadata, opts.folder);
 
-  // Merge with existing frontmatter if requested
+  // Merge with existing frontmatter if requested. When folder is supplied
+  // explicitly here, it should win over whatever's on disk (we just looked
+  // it up from a fresh map). The merge order in mergeFrontmatter favors
+  // existing keys, so we strip any existing `folder:` before merging.
   if (opts.mergeExistingFrontmatter && existingFrontmatter) {
-    frontmatter = mergeFrontmatter(existingFrontmatter, frontmatter);
+    const merged: Record<string, unknown> = { ...existingFrontmatter };
+    if (opts.folder !== undefined) {
+      delete merged.folder;
+    }
+    frontmatter = mergeFrontmatter(merged, frontmatter);
   }
 
   // Determine body content
@@ -736,12 +764,12 @@ export async function writeBookmarkMarkdown(
   // Extract articles from all tweets (original, thread, replies) and their quoted tweets
   // Skip if we're only updating frontmatter
   if (!opts.frontmatterOnly) {
-    await extractArticlesFromTweet(bookmark.originalTweet, outputDir);
+    await extractArticlesFromTweet(bookmark.originalTweet, outputDir, opts.folder);
     for (const tweet of bookmark.threadTweets) {
-      await extractArticlesFromTweet(tweet, outputDir);
+      await extractArticlesFromTweet(tweet, outputDir, opts.folder);
     }
     for (const tweet of bookmark.replies) {
-      await extractArticlesFromTweet(tweet, outputDir);
+      await extractArticlesFromTweet(tweet, outputDir, opts.folder);
     }
   }
 
@@ -751,19 +779,22 @@ export async function writeBookmarkMarkdown(
 // Write article from a linked tweet (fetched via getTweet)
 export async function writeArticleFromTweet(
   tweet: TweetData,
-  outputDir: string
+  outputDir: string,
+  folder?: string
 ): Promise<string | null> {
   if (!tweet.article) return null;
 
-  const articleResult = await generateArticleMarkdown(tweet);
+  const articleResult = await generateArticleMarkdown(tweet, folder);
   if (!articleResult) return null;
 
   await ensureArticlesDir(outputDir);
   const articlePath = join(outputDir, ARTICLES_DIR, articleResult.filename);
 
-  // Check if already exists
+  // Check if already exists. First writer wins for folder inheritance —
+  // if the same article slug is referenced from two bookmarks in different
+  // folders, whichever runs first sets the folder.
   if (await Bun.file(articlePath).exists()) {
-    return null; // Already written
+    return null;
   }
 
   try {

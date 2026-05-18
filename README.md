@@ -1,6 +1,8 @@
-# birdmarks
+# birdmarks + x bookmark folder support
 
 Export your Twitter/X bookmarks to markdown files with full thread expansion, media downloads, and article extraction. Note that rate limiting happens pretty quickly with replies, media, and quote tweet nesting, i.e. sometimes I get through around 100 before hitting the rate limit.
+
+> **Fork note:** this is a fork of [gitschwifty/birdmarks](https://github.com/gitschwifty/birdmarks) that adds X bookmark-folder support — see [`--with-folders`](#bookmark-folders) below. Behavior without the new flags is identical to upstream.
 
 ## Requirements
 
@@ -9,6 +11,8 @@ Export your Twitter/X bookmarks to markdown files with full thread expansion, me
 ## Installation
 
 ### Option 1: Download Release (Recommended)
+
+> The releases linked below are upstream binaries and **do not include folder support**. To use `--with-folders` / `--backfill-folders`, build from source (Option 2).
 
 Download the latest release for your platform from the [Releases](https://github.com/gitschwifty/birdmarks/releases) page:
 
@@ -74,6 +78,15 @@ bun run src/index.ts --rebuild --backfill-replies --replies
 
 # Rebuild with frontmatter backfilling (add YAML frontmatter to existing bookmarks)
 bun run src/index.ts --rebuild --backfill-frontmatter
+
+# Tag bookmarks with their X bookmark folders (writes folder: "..." in YAML frontmatter)
+bun run src/index.ts --with-folders
+
+# Rebuild the folder map from scratch (implies --with-folders)
+bun run src/index.ts --refresh-folders
+
+# Re-tag folder: on existing exports without re-fetching tweets
+bun run src/index.ts --backfill-folders
 ```
 
 ### Options
@@ -90,6 +103,9 @@ bun run src/index.ts --rebuild --backfill-frontmatter
 | `-R, --rebuild` | Iterate all bookmarks from beginning (saves cursor for resume) |
 | `-B, --backfill-replies` | Backfill missing replies on existing bookmarks (use with `-R -r`) |
 | `-F, --backfill-frontmatter` | Add YAML frontmatter to existing bookmarks (use with `-R`) |
+| `--with-folders` | Tag bookmarks with their X bookmark folders (adds `folder:` to YAML frontmatter) |
+| `--refresh-folders` | Force rebuild of the folder map (implies `--with-folders`) |
+| `--backfill-folders` | Re-tag `folder:` on already-exported `.md` files without re-fetching tweets |
 | `--quote-depth <n>` | Maximum depth for expanding quoted tweets (default: 3, -1 for unlimited) |
 | `--cookie-source <browser>` | Browser to get cookies from: `safari`, `chrome`, `firefox` |
 | `-h, --help` | Show help message |
@@ -121,6 +137,7 @@ author: DanielleFong
 author_name: "Danielle Fong 🔆"
 date: 2026-01-29
 url: https://twitter.com/DanielleFong/status/2016987515279069403
+folder: "Claude"  # only present with --with-folders; "unlabeled" when not in any folder
 thread_length: 3
 reply_count: 15
 media_count: 2
@@ -178,6 +195,26 @@ bookmarks/
 - **Incremental export** - Skips already-exported bookmarks
 - **Single tweet mode** - Process a single tweet by ID for testing or re-running errors
 - **Rebuild mode** - Iterate all bookmarks from beginning, optionally backfilling replies or frontmatter on existing bookmarks
+- **X bookmark folders** - With `--with-folders`, tag each export with its X folder name in the YAML frontmatter (uses the `BookmarkFoldersSlice` GraphQL endpoint)
+
+## Bookmark Folders
+
+X (Premium) lets you organize bookmarks into folders. With `--with-folders`, birdmarks records which folder each bookmark lives in as `folder: "<name>"` in the YAML frontmatter. Bookmarks not in any folder get `folder: "unlabeled"`.
+
+How it works:
+
+1. On the first `--with-folders` run, birdmarks calls X's `BookmarkFoldersSlice` to enumerate your folders, then paginates each folder via `BookmarkFolderTimeline` to build a `tweetId → folder name` map. The map is persisted to `exporter-state.json` and reused on subsequent runs.
+2. During the regular bookmark loop, each bookmark looks up its folder from the map. Articles inherit the folder of the bookmark that referenced them (first-writer-wins if multiple bookmarks reference the same article).
+3. Rate-limit hits during the map build save partial progress; the next run resumes from the in-flight folder's cursor.
+
+Refreshing the map:
+
+- The map is **not** auto-refreshed. New folders or bookmark/folder reassignments on X won't be picked up until you pass `--refresh-folders`.
+- Run `--backfill-folders` alone to rewrite the `folder:` line on already-exported `.md` files without re-fetching any tweets.
+
+If folder listing breaks (X rotates the GraphQL query ID / feature flags every few weeks), see the header comment in [src/folders-client.ts](src/folders-client.ts) for instructions on grabbing the new values from a logged-in browser session.
+
+Multi-folder tweets: if a bookmark is in multiple folders, the first folder encountered during enumeration wins. Logged at the end of the build pass.
 
 ## Rate Limiting
 

@@ -1,7 +1,8 @@
 import { resolve } from "path";
 import { mkdir } from "fs/promises";
-import { TwitterClient, resolveCredentials } from "@steipete/bird";
-import { exportBookmarks, exportSingleTweet, exportBookmarksRebuild } from "./exporter";
+import { resolveCredentials } from "@steipete/bird";
+import { exportBookmarks, exportSingleTweet, exportBookmarksRebuild, backfillFolders } from "./exporter";
+import { BirdmarksTwitterClient } from "./folders-client";
 import type { ExporterConfig } from "./types";
 
 async function main() {
@@ -20,6 +21,9 @@ async function main() {
   let rebuildMode = false;
   let backfillReplies = false;
   let backfillFrontmatter = false;
+  let withFolders = false;
+  let refreshFolders = false;
+  let backfillFoldersMode = false;
   let verifyUser: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
@@ -58,6 +62,13 @@ async function main() {
       backfillReplies = true;
     } else if (arg === "-F" || arg === "--backfill-frontmatter") {
       backfillFrontmatter = true;
+    } else if (arg === "--with-folders") {
+      withFolders = true;
+    } else if (arg === "--refresh-folders") {
+      refreshFolders = true;
+      withFolders = true; // refresh implies with-folders
+    } else if (arg === "--backfill-folders") {
+      backfillFoldersMode = true;
     } else if (arg === "--verify-user") {
       const val = args[++i];
       if (val) verifyUser = val.replace(/^@/, "");
@@ -88,6 +99,8 @@ async function main() {
   if (rebuildMode) console.log(`Rebuild mode: enabled`);
   if (backfillReplies) console.log(`Backfill replies: enabled`);
   if (backfillFrontmatter) console.log(`Backfill frontmatter: enabled`);
+  if (withFolders) console.log(`With folders: enabled${refreshFolders ? " (refreshing map)" : ""}`);
+  if (backfillFoldersMode) console.log(`Backfill folders: enabled`);
   console.log("");
 
   // Ensure output directory exists
@@ -114,8 +127,8 @@ async function main() {
   }
   console.log("");
 
-  // Create Twitter client
-  const client = new TwitterClient({
+  // Create Twitter client (subclass with bookmark-folder listing support)
+  const client = new BirdmarksTwitterClient({
     cookies: credResult.cookies,
     quoteDepth,
   });
@@ -157,9 +170,38 @@ async function main() {
     rebuildMode,
     backfillReplies,
     backfillFrontmatter,
+    withFolders,
+    refreshFolders,
+    backfillFolders: backfillFoldersMode,
   };
 
   try {
+    // Standalone --backfill-folders mode: build the folder map, rewrite
+    // existing .md frontmatter, exit. No bookmark fetching.
+    if (backfillFoldersMode) {
+      console.log("Running folder backfill (no bookmark fetching)...");
+      console.log("");
+      const r = await backfillFolders(client, config);
+      console.log("");
+      if (r.rateLimited) {
+        console.log("=== Backfill Paused (Rate Limited) ===");
+        console.log("Run again later to resume folder-map build.");
+        process.exit(0);
+      }
+      if (r.stats) {
+        console.log("=== Backfill Complete ===");
+        console.log(`Bookmarks scanned: ${r.stats.scanned}`);
+        console.log(`  Tagged with folder: ${r.stats.taggedBookmarks}`);
+        console.log(`  Unlabeled: ${r.stats.unlabeledBookmarks}`);
+        console.log(`  Without frontmatter (skipped): ${r.stats.noFrontmatter}`);
+        console.log(`Articles tagged: ${r.stats.taggedArticles}`);
+        if (r.stats.conflictedArticles > 0) {
+          console.log(`Articles with folder conflicts (first folder kept): ${r.stats.conflictedArticles}`);
+        }
+      }
+      return;
+    }
+
     // Single tweet mode
     if (singleTweetId) {
       console.log(`Processing single tweet: ${singleTweetId}`);
@@ -191,6 +233,7 @@ async function main() {
       console.log(`Skipped (already exists): ${result.skipped}`);
       if (result.backfilled) console.log(`Backfilled replies: ${result.backfilled}`);
       if (result.frontmatterAdded) console.log(`Frontmatter added: ${result.frontmatterAdded}`);
+      if (result.foldersTagged) console.log(`Tagged with folder: ${result.foldersTagged}`);
       console.log(`Errors: ${result.errors}`);
       console.log("\nRun again later to resume from where you left off.");
       process.exit(0); // Clean exit - state is saved
@@ -200,6 +243,7 @@ async function main() {
       console.log(`Skipped (already exists): ${result.skipped}`);
       if (result.backfilled) console.log(`Backfilled replies: ${result.backfilled}`);
       if (result.frontmatterAdded) console.log(`Frontmatter added: ${result.frontmatterAdded}`);
+      if (result.foldersTagged) console.log(`Tagged with folder: ${result.foldersTagged}`);
       console.log(`Errors: ${result.errors}`);
       if (result.hitPreviousExport) {
         console.log("Stopped at previously exported bookmark.");
@@ -237,6 +281,9 @@ Options:
   -R, --rebuild        Iterate all bookmarks from beginning (saves cursor for resume)
   -B, --backfill-replies     Backfill missing replies on existing bookmarks (use with -R)
   -F, --backfill-frontmatter Add frontmatter to existing bookmarks (use with -R)
+  --with-folders       Tag bookmarks with X bookmark folders (writes folder: in YAML)
+  --refresh-folders    Rebuild the folder map from scratch (implies --with-folders)
+  --backfill-folders   Rewrite folder: tags on existing .md files (no tweet refetch)
   --quote-depth <n>    Maximum depth for quoted tweets (default: 3, -1 for unlimited)
   --cookie-source <s>  Browser to get cookies from: safari, chrome, firefox
   --verify-user <h>    Exit with error if logged-in user doesn't match handle

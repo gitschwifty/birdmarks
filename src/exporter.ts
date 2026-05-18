@@ -14,6 +14,14 @@ import {
 import { expandThread } from "./thread";
 import { processTweet, writeBookmarkMarkdown, writeArticleFromTweet, generateRepliesSection } from "./markdown";
 import { ensureAssetsDir } from "./media";
+import { BirdmarksTwitterClient } from "./folders-client";
+import {
+  buildFolderMap,
+  getFolderForTweet,
+  FolderRateLimitError,
+  backfillFolderField,
+  UNLABELED,
+} from "./folders";
 
 const PAGE_DELAY_MS = 2000; // 2 seconds between pages
 
@@ -25,6 +33,7 @@ interface ExportResult {
   rateLimited: boolean;
   backfilled?: number; // Number of bookmarks that had replies backfilled
   frontmatterAdded?: number; // Number of bookmarks that had frontmatter added/updated
+  foldersTagged?: number; // Number of bookmarks tagged with a folder name
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -120,7 +129,8 @@ function collectLinkedIds(bookmark: ProcessedBookmark): {
 async function fetchLinkedArticles(
   client: TwitterClient,
   statusIds: string[],
-  config: ExporterConfig
+  config: ExporterConfig,
+  parentFolder?: string
 ): Promise<void> {
   // Fetch status URLs (tweets that might have articles)
   for (const statusId of statusIds) {
@@ -130,7 +140,7 @@ async function fetchLinkedArticles(
         `fetching linked tweet ${statusId}`
       );
       if (result.success && result.tweet && result.tweet.article) {
-        const written = await writeArticleFromTweet(result.tweet, config.outputDir);
+        const written = await writeArticleFromTweet(result.tweet, config.outputDir, parentFolder);
         if (written) {
           console.log(`    Found linked article: ${result.tweet.article.title}`);
         }
@@ -157,7 +167,8 @@ async function fetchLinkedArticles(
 async function fetchArticlesFromTweetsWithArticleLinks(
   client: TwitterClient,
   tweetsWithArticleLinks: { tweetId: string; articleIds: string[] }[],
-  config: ExporterConfig
+  config: ExporterConfig,
+  parentFolder?: string
 ): Promise<void> {
   for (const { tweetId, articleIds } of tweetsWithArticleLinks) {
     try {
@@ -166,7 +177,7 @@ async function fetchArticlesFromTweetsWithArticleLinks(
         `fetching article tweet ${tweetId}`
       );
       if (result.success && result.tweet && result.tweet.article) {
-        const written = await writeArticleFromTweet(result.tweet, config.outputDir);
+        const written = await writeArticleFromTweet(result.tweet, config.outputDir, parentFolder);
         if (written) {
           console.log(`    Found article from tweet ${tweetId}: ${result.tweet.article.title}`);
         }
@@ -282,13 +293,26 @@ async function processBookmark(
 
 // Export a single tweet by ID (for testing or re-running errors)
 export async function exportSingleTweet(
-  client: TwitterClient,
+  client: BirdmarksTwitterClient,
   tweetId: string,
   config: ExporterConfig
 ): Promise<{ success: boolean; error?: string; filename?: string }> {
   // Ensure output directory exists
   await Bun.write(config.outputDir + "/.keep", "");
   await ensureAssetsDir(config.outputDir);
+
+  // If --with-folders, reuse an existing folder map but don't build one
+  // for a single tweet (too expensive). Falls back to "unlabeled".
+  let folder: string | undefined;
+  if (config.withFolders) {
+    const state = await loadState(config.outputDir);
+    folder = getFolderForTweet(state.folderMap, tweetId);
+    if (!state.folderMap) {
+      console.warn(
+        "  --with-folders is on but no folder map exists. Run a full export first or use --refresh-folders. Tagging as 'unlabeled'."
+      );
+    }
+  }
 
   console.log(`Fetching tweet ${tweetId}...`);
 
@@ -310,25 +334,28 @@ export async function exportSingleTweet(
   const processed = await processBookmark(client, tweet, config);
 
   // Write markdown
-  const filename = await writeBookmarkMarkdown(processed, config.outputDir, config.useDateFolders);
-  console.log(`Exported: ${filename}`);
+  const filename = await writeBookmarkMarkdown(processed, config.outputDir, {
+    useDateFolders: config.useDateFolders,
+    folder,
+  });
+  console.log(`Exported: ${filename}${folder ? ` [folder: ${folder}]` : ""}`);
 
   // Fetch any linked articles
   const { statusIds, tweetsWithArticleLinks } = collectLinkedIds(processed);
   if (statusIds.length > 0) {
     console.log(`Fetching ${statusIds.length} linked tweets for potential articles...`);
-    await fetchLinkedArticles(client, statusIds, config);
+    await fetchLinkedArticles(client, statusIds, config, folder);
   }
   if (tweetsWithArticleLinks.length > 0) {
     console.log(`Fetching ${tweetsWithArticleLinks.length} tweets with article links...`);
-    await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config);
+    await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config, folder);
   }
 
   return { success: true, filename };
 }
 
 export async function exportBookmarks(
-  client: TwitterClient,
+  client: BirdmarksTwitterClient,
   config: ExporterConfig
 ): Promise<ExportResult> {
   const result: ExportResult = {
@@ -337,6 +364,7 @@ export async function exportBookmarks(
     errors: 0,
     hitPreviousExport: false,
     rateLimited: false,
+    foldersTagged: 0,
   };
 
   // Ensure output directory exists
@@ -345,6 +373,26 @@ export async function exportBookmarks(
 
   // Load state
   let state = await loadState(config.outputDir);
+
+  // Build / refresh folder map before any bookmark fetching, if requested.
+  // Rate-limit hits during build save partial state and exit cleanly,
+  // matching the existing pattern.
+  let folderMap: Record<string, string> | undefined;
+  if (config.withFolders) {
+    try {
+      folderMap = await buildFolderMap(client, config.outputDir, {
+        refresh: config.refreshFolders,
+      });
+      state = await loadState(config.outputDir); // Reload — buildFolderMap wrote state
+    } catch (error) {
+      if (error instanceof FolderRateLimitError) {
+        console.error(`\n${error.message}. Partial folder map saved. Resume to continue.`);
+        result.rateLimited = true;
+        return result;
+      }
+      throw error;
+    }
+  }
 
   console.log("Starting bookmark export...");
 
@@ -470,17 +518,22 @@ export async function exportBookmarks(
               // Use processBookmark which handles article re-fetching
               const processed = await processBookmark(client, tweet, config);
 
-              const filename = await writeBookmarkMarkdown(processed, config.outputDir, config.useDateFolders);
-              console.log(`  Exported (new): ${filename}`);
+              const folder = folderMap ? getFolderForTweet(folderMap, tweet.id) : undefined;
+              const filename = await writeBookmarkMarkdown(processed, config.outputDir, {
+                useDateFolders: config.useDateFolders,
+                folder,
+              });
+              console.log(`  Exported (new): ${filename}${folder && folder !== UNLABELED ? ` [folder: ${folder}]` : ""}`);
               result.exported++;
+              if (folder && folder !== UNLABELED) result.foldersTagged = (result.foldersTagged ?? 0) + 1;
 
               // Fetch any linked articles
               const { statusIds, tweetsWithArticleLinks } = collectLinkedIds(processed);
               if (statusIds.length > 0) {
-                await fetchLinkedArticles(client, statusIds, config);
+                await fetchLinkedArticles(client, statusIds, config, folder);
               }
               if (tweetsWithArticleLinks.length > 0) {
-                await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config);
+                await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config, folder);
               }
             } catch (error: unknown) {
               if (error instanceof RateLimitError) {
@@ -723,20 +776,25 @@ export async function exportBookmarks(
         );
 
         const processed = await processBookmark(client, tweet, config);
-        const filename = await writeBookmarkMarkdown(processed, config.outputDir, config.useDateFolders);
+        const folder = folderMap ? getFolderForTweet(folderMap, tweet.id) : undefined;
+        const filename = await writeBookmarkMarkdown(processed, config.outputDir, {
+          useDateFolders: config.useDateFolders,
+          folder,
+        });
 
-        console.log(`  Exported: ${filename}`);
+        console.log(`  Exported: ${filename}${folder && folder !== UNLABELED ? ` [folder: ${folder}]` : ""}`);
 
         // Fetch any linked articles
         const { statusIds, tweetsWithArticleLinks } = collectLinkedIds(processed);
         if (statusIds.length > 0) {
-          await fetchLinkedArticles(client, statusIds, config);
+          await fetchLinkedArticles(client, statusIds, config, folder);
         }
         if (tweetsWithArticleLinks.length > 0) {
-          await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config);
+          await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config, folder);
         }
 
         result.exported++;
+        if (folder && folder !== UNLABELED) result.foldersTagged = (result.foldersTagged ?? 0) + 1;
 
         // Update state - remove processed bookmark from current page
         state.currentPageBookmarks = bookmarksPage.slice(i + 1);
@@ -849,7 +907,7 @@ async function backfillRepliesForBookmark(
 
 // Rebuild mode: iterate all bookmarks from beginning, skip existing, optionally backfill replies/frontmatter
 export async function exportBookmarksRebuild(
-  client: TwitterClient,
+  client: BirdmarksTwitterClient,
   config: ExporterConfig
 ): Promise<ExportResult> {
   const result: ExportResult = {
@@ -860,6 +918,7 @@ export async function exportBookmarksRebuild(
     rateLimited: false,
     backfilled: 0,
     frontmatterAdded: 0,
+    foldersTagged: 0,
   };
 
   // Ensure output directory exists
@@ -869,12 +928,33 @@ export async function exportBookmarksRebuild(
   // Load state (for resume on rate limit)
   let state = await loadState(config.outputDir);
 
+  // Build / refresh folder map before any bookmark fetching, if requested.
+  let folderMap: Record<string, string> | undefined;
+  if (config.withFolders) {
+    try {
+      folderMap = await buildFolderMap(client, config.outputDir, {
+        refresh: config.refreshFolders,
+      });
+      state = await loadState(config.outputDir);
+    } catch (error) {
+      if (error instanceof FolderRateLimitError) {
+        console.error(`\n${error.message}. Partial folder map saved. Resume to continue.`);
+        result.rateLimited = true;
+        return result;
+      }
+      throw error;
+    }
+  }
+
   console.log("Starting rebuild mode...");
   if (config.backfillReplies) {
     console.log("Backfill replies: enabled");
   }
   if (config.backfillFrontmatter) {
     console.log("Backfill frontmatter: enabled");
+  }
+  if (config.withFolders) {
+    console.log("With folders: enabled");
   }
 
   // Start from beginning or resume from saved cursor
@@ -959,10 +1039,12 @@ export async function exportBookmarksRebuild(
                   ...config,
                   includeReplies: false, // Don't fetch replies just for frontmatter
                 });
+                const folder = folderMap ? getFolderForTweet(folderMap, tweet.id) : undefined;
                 await writeBookmarkMarkdown(processed, config.outputDir, {
                   useDateFolders: config.useDateFolders,
                   mergeExistingFrontmatter: true,
                   frontmatterOnly: true,
+                  folder,
                 });
                 console.log(`  Added frontmatter to ${tweet.id}`);
                 result.frontmatterAdded = (result.frontmatterAdded ?? 0) + 1;
@@ -1034,19 +1116,22 @@ export async function exportBookmarksRebuild(
 
         try {
           const processed = await processBookmark(client, tweet, config);
+          const folder = folderMap ? getFolderForTweet(folderMap, tweet.id) : undefined;
           const filename = await writeBookmarkMarkdown(processed, config.outputDir, {
             useDateFolders: config.useDateFolders,
+            folder,
           });
-          console.log(`  Exported: ${filename}`);
+          console.log(`  Exported: ${filename}${folder && folder !== UNLABELED ? ` [folder: ${folder}]` : ""}`);
           result.exported++;
+          if (folder && folder !== UNLABELED) result.foldersTagged = (result.foldersTagged ?? 0) + 1;
 
           // Fetch any linked articles
           const { statusIds, tweetsWithArticleLinks } = collectLinkedIds(processed);
           if (statusIds.length > 0) {
-            await fetchLinkedArticles(client, statusIds, config);
+            await fetchLinkedArticles(client, statusIds, config, folder);
           }
           if (tweetsWithArticleLinks.length > 0) {
-            await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config);
+            await fetchArticlesFromTweetsWithArticleLinks(client, tweetsWithArticleLinks, config, folder);
           }
         } catch (error) {
           if (error instanceof RateLimitError) {
@@ -1122,4 +1207,36 @@ export async function exportBookmarksRebuild(
   await finishRun(config.outputDir, { completedFullScan });
 
   return result;
+}
+
+// --backfill-folders entry point.
+// Builds (or reuses) the folder map, then rewrites the `folder:` line in
+// every existing bookmark .md and propagates the folder to articles each
+// bookmark links to. No tweet re-fetching, no media downloads — pure local
+// file rewriting after a single folder-map build.
+export async function backfillFolders(
+  client: BirdmarksTwitterClient,
+  config: ExporterConfig
+): Promise<{ rateLimited: boolean; stats?: Awaited<ReturnType<typeof backfillFolderField>> }> {
+  await Bun.write(config.outputDir + "/.keep", "");
+
+  let folderMap: Record<string, string>;
+  try {
+    folderMap = await buildFolderMap(client, config.outputDir, {
+      refresh: config.refreshFolders,
+    });
+  } catch (error) {
+    if (error instanceof FolderRateLimitError) {
+      console.error(`\n${error.message}. Partial folder map saved. Resume to continue.`);
+      return { rateLimited: true };
+    }
+    throw error;
+  }
+
+  console.log("\nApplying folder tags to existing markdown files...");
+  const stats = await backfillFolderField(config.outputDir, folderMap, {
+    useDateFolders: config.useDateFolders,
+  });
+
+  return { rateLimited: false, stats };
 }

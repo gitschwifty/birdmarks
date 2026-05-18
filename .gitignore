@@ -33,6 +33,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Finder (MacOS) folder config
 .DS_Store
 
+# macOS AppleDouble metadata files (created on non-HFS filesystems)
+._*
+
 private
 bookmarks
 tests.json
