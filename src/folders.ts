@@ -141,9 +141,12 @@ export async function buildFolderMap(
           throw new FolderRateLimitError(`folder "${folder.name}" page ${pageNum}`);
         }
         console.warn(`  Folder "${folder.name}" page ${pageNum} failed: ${error}`);
-        // Move on — fail open, this folder is partially mapped. Don't mark
-        // it as done since we might want to retry on --refresh-folders.
-        break;
+        // Preserve resumable state and abort. Continuing would let callers tag
+        // exports from a partial map while also marking this build complete.
+        state.folderMapBuildState = buildState;
+        state.folderMap = map;
+        await saveState(outputDir, state);
+        throw error;
       }
 
       for (const tweet of pageTweets) {

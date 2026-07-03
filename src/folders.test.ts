@@ -2,8 +2,9 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "path";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
-import { getFolderForTweet, backfillFolderField, UNLABELED } from "./folders";
+import { getFolderForTweet, backfillFolderField, buildFolderMap, UNLABELED } from "./folders";
 import { generateFrontmatter, parseFrontmatter } from "./markdown";
+import { loadState } from "./state";
 import type { ProcessedBookmark, ProcessedTweet } from "./types";
 
 function makeProcessedBookmark(id: string, author = "alice", text = "hello"): ProcessedBookmark {
@@ -204,5 +205,38 @@ date: 2025-01-16
     // but assert exactly one was chosen (no folder list).
     const matched = updated.match(/folder: "(FolderA|FolderB)"/);
     expect(matched).not.toBeNull();
+  });
+});
+
+describe("buildFolderMap", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "birdmarks-folder-map-test-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  test("preserves partial state and does not mark complete on folder page failure", async () => {
+    const client = {
+      getBookmarkFolders: async () => [{ id: "12345678901234567", name: "Travel" }],
+      getAllBookmarkFolderTimeline: async () => ({
+        success: false,
+        error: "temporary upstream failure",
+      }),
+    };
+
+    await expect(buildFolderMap(client as never, tempDir)).rejects.toThrow(
+      "temporary upstream failure"
+    );
+
+    const state = await loadState(tempDir);
+    expect(state.folderMapBuiltAt).toBeUndefined();
+    expect(state.folderMapBuildState).toEqual({
+      doneIds: [],
+      inFlight: { id: "12345678901234567", cursor: undefined },
+    });
   });
 });
