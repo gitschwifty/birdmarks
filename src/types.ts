@@ -22,12 +22,26 @@ export interface BookmarkFrontmatter {
   author_name: string;
   date: string; // ISO date (yyyy-mm-dd)
   url: string;
+  folder?: string; // X bookmark folder name, or "unlabeled". Only present when --with-folders is used.
   thread_length?: number;
   reply_count?: number;
   media_count?: number;
   quoted_tweet?: string;
   hashtags?: string[];
   links?: LinkMetadata[];
+}
+
+// One X bookmark folder
+export interface BookmarkFolder {
+  id: string;
+  name: string;
+}
+
+// In-flight folder-map build state, persisted across runs so a rate-limit
+// hit during the map build resumes cleanly. Cleared on successful completion.
+export interface FolderMapBuildState {
+  inFlight?: { id: string; cursor?: string };
+  doneIds: string[];
 }
 
 // Resolved URL with optional pre-fetched OG metadata
@@ -76,6 +90,11 @@ export interface ExporterState {
   // Completion tracking
   allBookmarksProcessed?: boolean; // Set true when no more pages
   lastFullScanAt?: string; // ISO timestamp of completion
+
+  // Folder support (only populated when --with-folders has been used)
+  folderMap?: Record<string, string>; // tweetId → folder name
+  folderMapBuiltAt?: string; // ISO timestamp of last successful build
+  folderMapBuildState?: FolderMapBuildState; // Present only during an in-progress build
 }
 
 // Error tracking
@@ -98,4 +117,7 @@ export interface ExporterConfig {
   rebuildMode?: boolean; // Iterate all bookmarks from beginning, save cursor as you go
   backfillReplies?: boolean; // Backfill missing replies on existing bookmarks (use with -R)
   backfillFrontmatter?: boolean; // Add/update frontmatter on existing bookmarks (use with -R)
+  withFolders?: boolean; // Tag bookmarks with `folder:` in frontmatter (X bookmark folders)
+  refreshFolders?: boolean; // Force rebuild of the folder map even if state.folderMap exists
+  backfillFolders?: boolean; // Re-tag existing .md files with folder: from a fresh folder map
 }
