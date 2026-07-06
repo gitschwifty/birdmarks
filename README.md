@@ -1,8 +1,6 @@
-# birdmarks + x bookmark folder support
+# birdmarks
 
-Export your Twitter/X bookmarks to markdown files with full thread expansion, media downloads, and article extraction. Note that rate limiting happens pretty quickly with replies, media, and quote tweet nesting, i.e. sometimes I get through around 100 before hitting the rate limit.
-
-> **Fork note:** this is a fork of [gitschwifty/birdmarks](https://github.com/gitschwifty/birdmarks) that adds X bookmark-folder support — see [`--with-folders`](#bookmark-folders) below. Behavior without the new flags is identical to upstream.
+Export your Twitter/X bookmarks to markdown files with full thread expansion, media downloads, article extraction, and optional X bookmark-folder metadata. Note that rate limiting happens pretty quickly with replies, media, and quote tweet nesting, i.e. sometimes I get through around 100 before hitting the rate limit.
 
 ## Requirements
 
@@ -11,8 +9,6 @@ Export your Twitter/X bookmarks to markdown files with full thread expansion, me
 ## Installation
 
 ### Option 1: Download Release (Recommended)
-
-> The releases linked below are upstream binaries and **do not include folder support**. To use `--with-folders` / `--backfill-folders`, build from source (Option 2).
 
 Download the latest release for your platform from the [Releases](https://github.com/gitschwifty/birdmarks/releases) page:
 

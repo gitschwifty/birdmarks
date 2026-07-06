@@ -54,7 +54,6 @@ Fetches only new bookmarks (most recent → anchor), never touches the old saved
 ## Organization
 - [ ] AI-powered categorization/tagging of bookmarks
 - [ ] Generate index.md with all bookmarks grouped by category
-- [ ] Support for bookmark folders (bird supports `--folder`) — draft plan in [BOOKMARK_FOLDERS.md](./BOOKMARK_FOLDERS.md), awaiting requester feedback
 
 ## Performance
 - [ ] Parallel processing of bookmarks (with rate limit awareness)
